@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+
+# Dados baixados (raw e processed nao vao pro git, so o .gitkeep)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/raw/**/.gitkeep
+
+# IDE / OS
+.vscode/
+.DS_Store
+
+# Config local do Claude Code (permissoes especificas da maquina)
+.claude/settings.local.json

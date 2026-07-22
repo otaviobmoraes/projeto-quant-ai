@@ -1,0 +1,22 @@
+# Core numerico / dados
+pandas
+numpy
+scipy
+statsmodels
+arch
+scikit-learn
+lightgbm
+pyarrow
+
+# NLP (FinBERT-PT-BR)
+transformers
+torch
+
+# I/O e utilitarios
+requests
+python-dotenv
+
+# Dev / testes
+pytest
+black
+ruff
