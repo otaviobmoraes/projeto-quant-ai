@@ -91,6 +91,65 @@ def test_evaluate_perfect_predictions_give_r2_one():
     assert result["rmse"] == pytest.approx(0.0)
 
 
+def test_fit_har_log_target_recovers_log_linear_relationship():
+    rng = np.random.default_rng(7)
+    rv_d = rng.uniform(0.1, 2.0, 200)
+    # Alvo log-linear em rv_d (+ ruido pequeno em log-escala) -- cenario onde
+    # ajustar em log(RV) deve bater bem melhor do que em nivel.
+    target = np.exp(1.0 + 0.5 * rv_d + rng.normal(0, 0.01, 200))
+    train = pd.DataFrame({"rv_d": rv_d, "target": target})
+
+    model_log = forecast.fit_har(train, ["rv_d"], log_target=True)
+    result_log = forecast.evaluate(model_log, train, ["rv_d"], log_target=True)
+
+    model_level = forecast.fit_har(train, ["rv_d"], log_target=False)
+    result_level = forecast.evaluate(model_level, train, ["rv_d"], log_target=False)
+
+    assert result_log["r2_oos"] > result_level["r2_oos"]
+    assert result_log["r2_oos"] > 0.9
+
+
+def test_build_dataset_news_smooth_window_reduces_noise():
+    prices = _price_series(80)
+    rng = np.random.default_rng(5)
+    noisy_news = pd.Series(rng.normal(0, 1, len(prices)), index=prices.index)
+
+    raw = forecast.build_dataset(prices, news=noisy_news, horizon=5)
+    smoothed = forecast.build_dataset(prices, news=noisy_news, horizon=5, news_smooth_window=21)
+
+    assert smoothed["news"].std() < raw["news"].std()
+
+
+def test_expanding_window_splits_are_chronological_and_non_overlapping():
+    prices = _price_series(150)
+    dataset = forecast.build_dataset(prices, horizon=5)
+
+    folds = forecast.expanding_window_splits(dataset, n_splits=4)
+
+    assert len(folds) == 4
+    prev_test_end = None
+    for train, test in folds:
+        assert train.index.max() < test.index.min()
+        if prev_test_end is not None:
+            assert test.index.min() > prev_test_end
+        prev_test_end = test.index.max()
+
+
+def test_run_ablation_cv_recovers_signal_when_news_is_informative():
+    prices = _price_series(400, seed=8)
+    dataset_baseline = forecast.build_dataset(prices, horizon=21)
+
+    rng = np.random.default_rng(9)
+    informative_news = dataset_baseline["target"] + rng.normal(0, 0.01, len(dataset_baseline))
+    news_series = informative_news.reindex(prices.index)
+
+    result = forecast.run_ablation_cv(prices, news_series, horizon=21, n_splits=4)
+
+    assert "per_fold" in result and result["n_splits"] == 4
+    assert result["baseline"]["r2_oos"] < result["com_noticia"]["r2_oos"]
+    assert len(result["per_fold"]["baseline"]) == 4
+
+
 def test_load_and_run_ablation_missing_files_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(forecast, "PTAX_PROCESSED_PATH", tmp_path / "missing_ptax.parquet")
     monkeypatch.setattr(forecast, "TONE_PROCESSED_PATH", tmp_path / "missing_tone.parquet")
@@ -124,3 +183,28 @@ def test_load_and_run_ablation_reads_processed_parquets(tmp_path, monkeypatch):
 
     assert "baseline" in result and "com_noticia" in result
     assert result["n_train"] > 0 and result["n_test"] > 0
+
+
+def test_load_and_run_ablation_cv_reads_processed_parquets(tmp_path, monkeypatch):
+    prices = _price_series(400, seed=6)
+    ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
+    ptax_path = tmp_path / "ptax.parquet"
+    ptax_df.to_parquet(ptax_path)
+
+    tone_df = pd.DataFrame(
+        {
+            "date": prices.index,
+            "tone": np.random.default_rng(10).normal(0, 1, len(prices)),
+            "query": "Brazil",
+        }
+    )
+    tone_path = tmp_path / "gdelt_tone.parquet"
+    tone_df.to_parquet(tone_path)
+
+    monkeypatch.setattr(forecast, "PTAX_PROCESSED_PATH", ptax_path)
+    monkeypatch.setattr(forecast, "TONE_PROCESSED_PATH", tone_path)
+
+    result = forecast.load_and_run_ablation_cv(horizon=21, n_splits=3, query="Brazil")
+
+    assert result["n_splits"] == 3
+    assert "baseline" in result and "com_noticia" in result
