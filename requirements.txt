@@ -7,6 +7,7 @@ arch
 scikit-learn
 lightgbm
 pyarrow
+openpyxl
 
 # NLP (FinBERT-PT-BR)
 transformers
