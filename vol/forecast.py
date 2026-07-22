@@ -192,7 +192,7 @@ def run_ablation_cv(
     }
 
 
-def _load_prices_and_news(tipo: str, query: str | None) -> tuple[pd.Series, pd.Series]:
+def load_prices_and_news(tipo: str, query: str | None) -> tuple[pd.Series, pd.Series]:
     """I/O comum aos wrappers load_and_run_ablation*: le o PTAX e o tom do
     GDELT ja coletados (data/ptax.py, data/gdelt_news.py)."""
     if not PTAX_PROCESSED_PATH.exists():
@@ -218,7 +218,7 @@ def load_and_run_ablation(
 ) -> dict:
     """Le o PTAX e o tom do GDELT ja coletados e roda a ablacao HAR-RV
     baseline vs com noticia (split unico treino/teste)."""
-    prices, news = _load_prices_and_news(tipo, query)
+    prices, news = load_prices_and_news(tipo, query)
     return run_ablation(prices, news, horizon=horizon, test_size=test_size)
 
 
@@ -233,7 +233,7 @@ def load_and_run_ablation_cv(
     """Equivalente a load_and_run_ablation, mas usando run_ablation_cv
     (validacao cruzada expansiva) em vez de um unico split treino/teste.
     """
-    prices, news = _load_prices_and_news(tipo, query)
+    prices, news = load_prices_and_news(tipo, query)
     return run_ablation_cv(
         prices,
         news,
