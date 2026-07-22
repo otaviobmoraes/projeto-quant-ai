@@ -15,6 +15,7 @@ torch
 # I/O e utilitarios
 requests
 python-dotenv
+yfinance
 
 # Dev / testes
 pytest
