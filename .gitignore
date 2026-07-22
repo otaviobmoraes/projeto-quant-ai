@@ -15,10 +15,12 @@ venv/
 data/raw/*
 data/processed/*
 sentiment/processed/*
+report/output/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/raw/**/.gitkeep
 !sentiment/processed/.gitkeep
+!report/output/.gitkeep
 
 # IDE / OS
 .vscode/
