@@ -88,7 +88,13 @@ def fit_har(train: pd.DataFrame, feature_cols: list[str], log_target: bool = Fal
     negativa e estabiliza a variancia dos residuos) e costuma generalizar
     melhor fora da amostra do que RV em nivel.
     """
-    X = sm.add_constant(train[feature_cols])
+    # has_constant="add" e obrigatorio aqui: o default ("skip") detecta
+    # qualquer feature constante DENTRO do fold de treino (pode acontecer
+    # com series de baixa variancia, ex.: dispersion/theta_baseline em
+    # janelas curtas) e pula a adicao do intercepto -- af entao o numero de
+    # colunas do treino fica menor que o do teste (que sempre forca "add" em
+    # evaluate()), quebrando o predict() por incompatibilidade de shape.
+    X = sm.add_constant(train[feature_cols], has_constant="add")
     y = np.log(train["target"]) if log_target else train["target"]
     return sm.OLS(y, X).fit()
 
