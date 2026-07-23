@@ -16,11 +16,16 @@ data/raw/*
 data/processed/*
 sentiment/processed/*
 report/output/*
+credibility/raw/*
+credibility/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/raw/**/.gitkeep
 !sentiment/processed/.gitkeep
 !report/output/.gitkeep
+!credibility/raw/.gitkeep
+!credibility/processed/.gitkeep
+!credibility/raw/**/.gitkeep
 
 # IDE / OS
 .vscode/
