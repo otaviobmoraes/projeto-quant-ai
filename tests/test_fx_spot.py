@@ -55,10 +55,12 @@ def test_parse_raw_file_builds_expected_dataframe(tmp_path):
 
     df = fx_spot._parse_raw_file(path)
 
-    assert list(df.columns) == ["date", "close"]
+    assert list(df.columns) == ["date", "open", "high", "low", "close"]
     assert len(df) == 2
     assert str(df["date"].dt.tz) == fx_spot.TIMEZONE
     assert df["close"].tolist() == [4.8520, 4.9010]
+    assert df["high"].tolist() == [4.88, 4.93]
+    assert df["low"].tolist() == [4.83, 4.89]
 
 
 def test_load_fx_spot_processed_writes_parquet(monkeypatch):

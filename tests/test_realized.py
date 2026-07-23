@@ -61,3 +61,53 @@ def test_load_ptax_realized_vol_missing_file_raises(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         realized.load_ptax_realized_vol()
+
+
+def test_parkinson_daily_variance_zero_when_high_equals_low():
+    high = pd.Series([5.0, 5.1, 5.2])
+    low = high.copy()
+    variance = realized.parkinson_daily_variance(high, low)
+    assert (variance == 0).all()
+
+
+def test_parkinson_daily_variance_matches_manual_calc():
+    high = pd.Series([5.10])
+    low = pd.Series([5.00])
+    variance = realized.parkinson_daily_variance(high, low)
+
+    expected = np.log(5.10 / 5.00) ** 2 / (4 * np.log(2))
+    assert variance.iloc[0] == pytest.approx(expected)
+
+
+def test_parkinson_daily_variance_less_noisy_than_squared_return():
+    # Mesma serie de precos: a variancia diaria via Parkinson (usa o range
+    # intradiario simulado) tem desvio-padrao MENOR que o quadrado do
+    # retorno de fechamento, ao longo de uma amostra grande -- e a razao de
+    # usar Parkinson em primeiro lugar (estimador menos ruidoso).
+    rng = np.random.default_rng(7)
+    n = 500
+    close = pd.Series(5.0 * np.exp(np.cumsum(rng.normal(0, 0.01, n))))
+    # Simula um range intradiario plausivel em torno do close (sempre high >= low).
+    intraday_noise = np.abs(rng.normal(0, 0.003, n))
+    high = close * (1 + intraday_noise)
+    low = close * (1 - intraday_noise)
+
+    close_to_close_var = realized.log_returns(close) ** 2
+    parkinson_var = realized.parkinson_daily_variance(high, low)
+
+    assert parkinson_var.std() < close_to_close_var.std()
+
+
+def test_parkinson_vol_scales_with_annualization_factor():
+    rng = np.random.default_rng(1)
+    n = 60
+    close = pd.Series(5.0 * np.exp(np.cumsum(rng.normal(0, 0.01, n))))
+    intraday_noise = np.abs(rng.normal(0, 0.003, n))
+    high = close * (1 + intraday_noise)
+    low = close * (1 - intraday_noise)
+
+    vol_252 = realized.parkinson_vol(high, low, window=10, annualization_factor=252)
+    vol_1 = realized.parkinson_vol(high, low, window=10, annualization_factor=1)
+
+    ratio = (vol_252 / vol_1).dropna()
+    assert ratio.apply(lambda x: x == pytest.approx(np.sqrt(252), rel=1e-6)).all()

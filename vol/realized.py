@@ -31,6 +31,33 @@ def realized_vol(
     return returns.rolling(window).std() * np.sqrt(annualization_factor) * 100
 
 
+def parkinson_daily_variance(high: pd.Series, low: pd.Series) -> pd.Series:
+    """Variancia diaria "instantanea" via estimador de Parkinson (1980),
+    usando o range intradiario (High/Low) em vez do retorno de fechamento.
+
+    RV_d = ln(High/Low)^2 / (4*ln2). E MUITO menos ruidoso que o quadrado do
+    retorno de fechamento como proxy de variancia de 1 dia -- um unico
+    retorno ao quadrado tem variancia do proprio estimador enorme (kurtose
+    alta), enquanto o range intradiario usa mais informacao do dia (o
+    caminho percorrido, nao so o ponto final). Efficiency teorica ~5x maior
+    que o estimador close-to-close (Parkinson, 1980).
+
+    Drop-in replacement pra `log_returns(prices)**2` em qualquer lugar que
+    espere uma serie de variancia diaria (ex.: vol.forecast.build_dataset
+    via o parametro `daily_variance`).
+    """
+    return (np.log(high / low) ** 2) / (4 * np.log(2))
+
+
+def parkinson_vol(
+    high: pd.Series, low: pd.Series, window: int, annualization_factor: int = TRADING_DAYS_PER_YEAR
+) -> pd.Series:
+    """RV anualizada (Parkinson), em pontos percentuais, numa janela rolante
+    de `window` dias uteis de variancia diaria tipo Parkinson."""
+    daily_var = parkinson_daily_variance(high, low)
+    return np.sqrt(daily_var.rolling(window).mean() * annualization_factor) * 100
+
+
 def load_ptax_realized_vol(window: int = 21, tipo: str = "venda") -> pd.DataFrame:
     """Le o parquet processado do PTAX (ja coletado por data.ptax.load_ptax_processed)
     e monta a serie de RV realizada de `window` dias uteis, anualizada.

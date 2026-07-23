@@ -52,6 +52,35 @@ def test_build_dataset_without_news_has_no_news_column():
     assert "news" not in dataset.columns
 
 
+def test_build_dataset_daily_variance_override_replaces_close_to_close():
+    prices = _price_series(60, seed=9)
+    default_dataset = forecast.build_dataset(prices, horizon=5)
+
+    # Variancia diaria diferente (ex.: Parkinson) -> features/target tem
+    # que refletir a serie fornecida, nao o retorno de fechamento.
+    custom_variance = pd.Series(0.0001, index=prices.index)
+    custom_dataset = forecast.build_dataset(prices, horizon=5, daily_variance=custom_variance)
+
+    assert not custom_dataset["rv_d"].equals(default_dataset["rv_d"])
+    assert (custom_dataset["rv_d"] == 0.0001).all()
+
+
+def test_har_features_from_variance_matches_har_features():
+    prices = _price_series(60, seed=11)
+    variance = forecast.log_returns(prices) ** 2
+
+    assert forecast.har_features(prices).equals(forecast.har_features_from_variance(variance))
+
+
+def test_forward_target_from_variance_matches_forward_target():
+    prices = _price_series(60, seed=12)
+    variance = forecast.log_returns(prices) ** 2
+
+    left = forecast.forward_target(prices, horizon=10)
+    right = forecast.forward_target_from_variance(variance, horizon=10)
+    pd.testing.assert_series_equal(left, right)
+
+
 def test_chronological_split_preserves_time_order():
     prices = _price_series(80)
     dataset = forecast.build_dataset(prices, horizon=5)
@@ -77,6 +106,33 @@ def test_run_ablation_recovers_signal_when_news_is_informative():
     assert result["baseline"]["r2_oos"] < result["com_noticia"]["r2_oos"]
     assert result["com_noticia"]["rmse"] < result["baseline"]["rmse"]
     assert result["n_train"] > 0 and result["n_test"] > 0
+
+
+def test_persistence_forecast_matches_manual_calc():
+    dataset = pd.DataFrame({"rv_m": [0.0001, 0.0004], "target": [10.0, 20.0]})
+    pred = forecast.persistence_forecast(dataset)
+
+    expected = np.sqrt(dataset["rv_m"] * forecast.TRADING_DAYS_PER_YEAR) * 100
+    assert pred.tolist() == pytest.approx(expected.tolist())
+
+
+def test_evaluate_persistence_perfect_when_rv_m_matches_target_exactly():
+    # rv_m (em variancia diaria) escolhido pra que sqrt(rv_m*252)*100 bata
+    # exatamente com o target -- persistencia "perfeita" por construcao.
+    target = np.array([10.0, 15.0, 8.0])
+    rv_m = (target / 100) ** 2 / forecast.TRADING_DAYS_PER_YEAR
+    dataset = pd.DataFrame({"rv_m": rv_m, "target": target})
+
+    result = forecast.evaluate_persistence(dataset)
+    assert result["r2_oos"] == pytest.approx(1.0)
+    assert result["rmse"] == pytest.approx(0.0, abs=1e-8)
+
+
+def test_evaluate_persistence_worse_than_mean_gives_negative_r2():
+    # rv_m sistematicamente longe do target -> pior que prever a media.
+    dataset = pd.DataFrame({"rv_m": [0.01, 0.01, 0.01], "target": [5.0, 5.1, 4.9]})
+    result = forecast.evaluate_persistence(dataset)
+    assert result["r2_oos"] < 0
 
 
 def test_evaluate_perfect_predictions_give_r2_one():

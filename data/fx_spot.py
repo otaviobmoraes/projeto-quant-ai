@@ -55,18 +55,24 @@ def fetch_fx_spot_raw(start: date, end: date) -> Path:
 
 
 def _parse_raw_file(path: Path) -> pd.DataFrame:
-    """Parse puro do parquet cru do yfinance para o formato limpo do projeto."""
+    """Parse puro do parquet cru do yfinance para o formato limpo do projeto.
+
+    Mantem OHLC (nao so o close): High/Low sao necessarios pro estimador de
+    RV tipo Parkinson (vol/realized.py), bem menos ruidoso que o proxy de
+    retorno de fechamento unico usado quando so ha close.
+    """
     raw = pd.read_parquet(path)
     if raw.empty:
-        return pd.DataFrame(columns=["date", "close"])
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close"])
 
     if isinstance(raw.columns, pd.MultiIndex):
         raw.columns = raw.columns.get_level_values(0)
 
-    df = raw[["Close"]].rename(columns={"Close": "close"}).reset_index()
+    cols = {"Open": "open", "High": "high", "Low": "low", "Close": "close"}
+    df = raw[list(cols)].rename(columns=cols).reset_index()
     df = df.rename(columns={"Date": "date"})
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(TIMEZONE)
-    return df[["date", "close"]]
+    return df[["date", "open", "high", "low", "close"]]
 
 
 def load_fx_spot_processed(start: date, end: date) -> pd.DataFrame:

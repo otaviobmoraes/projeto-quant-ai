@@ -26,17 +26,32 @@ BASELINE_FEATURES = ["rv_d", "rv_w", "rv_m"]
 NEWS_FEATURES = BASELINE_FEATURES + ["news"]
 
 
-def har_features(prices: pd.Series) -> pd.DataFrame:
-    """Features HAR-RV (diaria, semanal=5d, mensal=22d) de variancia realizada
-    diaria (proxy: retorno log diario ao quadrado). Cada linha usa somente
-    dados ate aquele dia (sem look-ahead).
+def har_features_from_variance(daily_variance: pd.Series) -> pd.DataFrame:
+    """Features HAR-RV (diaria, semanal=5d, mensal=22d) a partir de uma serie
+    generica de variancia realizada diaria (retorno ao quadrado, Parkinson,
+    Garman-Klass, etc.) -- ver `har_features` para o caso especifico de so
+    ter preco de fechamento. Cada linha usa somente dados ate aquele dia
+    (sem look-ahead).
     """
-    r2 = log_returns(prices) ** 2
-    df = pd.DataFrame(index=prices.index)
-    df["rv_d"] = r2
-    df["rv_w"] = r2.rolling(5).mean()
-    df["rv_m"] = r2.rolling(22).mean()
+    df = pd.DataFrame(index=daily_variance.index)
+    df["rv_d"] = daily_variance
+    df["rv_w"] = daily_variance.rolling(5).mean()
+    df["rv_m"] = daily_variance.rolling(22).mean()
     return df
+
+
+def har_features(prices: pd.Series) -> pd.DataFrame:
+    """Features HAR-RV a partir so do preco de fechamento (variancia diaria
+    aproximada pelo retorno log ao quadrado -- ver docstring do modulo)."""
+    return har_features_from_variance(log_returns(prices) ** 2)
+
+
+def forward_target_from_variance(daily_variance: pd.Series, horizon: int) -> pd.Series:
+    """RV anualizada realizada nos `horizon` dias APOS cada data, a partir de
+    uma serie generica de variancia realizada diaria -- ver `forward_target`.
+    """
+    fwd_var = daily_variance.rolling(horizon).mean().shift(-horizon)
+    return np.sqrt(fwd_var * TRADING_DAYS_PER_YEAR) * 100
 
 
 def forward_target(prices: pd.Series, horizon: int) -> pd.Series:
@@ -44,9 +59,7 @@ def forward_target(prices: pd.Series, horizon: int) -> pd.Series:
     prever. Olha para frente por construcao (shift negativo): usado somente
     para montar o dataset supervisionado, nunca como feature de entrada.
     """
-    r2 = log_returns(prices) ** 2
-    fwd_var = r2.rolling(horizon).mean().shift(-horizon)
-    return np.sqrt(fwd_var * TRADING_DAYS_PER_YEAR) * 100
+    return forward_target_from_variance(log_returns(prices) ** 2, horizon)
 
 
 def build_dataset(
@@ -54,6 +67,7 @@ def build_dataset(
     news: pd.Series | None = None,
     horizon: int = 21,
     news_smooth_window: int | None = None,
+    daily_variance: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Monta o dataset supervisionado: features HAR (+ noticia, se fornecida)
     e o alvo (RV futura de `horizon` dias). A serie de noticia e alinhada por
@@ -64,9 +78,15 @@ def build_dataset(
     dessa janela ANTES do ffill/alinhamento (ex.: 21, para casar a cadencia
     com o componente mensal do HAR). O nivel bruto e ruidoso demais para
     prever RV com 21 dias de horizonte; a media suavizada e mais estavel.
+
+    `daily_variance`: se informado, usa essa serie como a variancia diaria
+    (em vez de recalcular do retorno de `prices`) -- permite plugar um
+    estimador de RV melhor (ex.: Parkinson via High/Low, ver vol/realized.py)
+    no mesmo pipeline HAR sem duplicar a logica de features/target/split.
     """
-    df = har_features(prices)
-    df["target"] = forward_target(prices, horizon)
+    variance = daily_variance if daily_variance is not None else log_returns(prices) ** 2
+    df = har_features_from_variance(variance)
+    df["target"] = forward_target_from_variance(variance, horizon)
     if news is not None:
         if news_smooth_window is not None:
             news = news.rolling(news_smooth_window, min_periods=1).mean()
@@ -111,6 +131,34 @@ def evaluate(model, test: pd.DataFrame, feature_cols: list[str], log_target: boo
     err = test["target"].to_numpy() - pred.to_numpy()
     ss_res = float((err**2).sum())
     ss_tot = float(((test["target"] - test["target"].mean()) ** 2).sum())
+    return {
+        "rmse": float(np.sqrt((err**2).mean())),
+        "mae": float(np.abs(err).mean()),
+        "r2_oos": 1 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
+    }
+
+
+def persistence_forecast(dataset: pd.DataFrame) -> pd.Series:
+    """Previsao INGENUA de RV futura: usa rv_m (variancia media dos ultimos
+    22 dias, ja em `dataset`) anualizada e convertida pra vol em pontos
+    percentuais -- equivale a dizer "a RV daqui a `horizon` dias vai ser
+    igual a de agora". Nao ajusta nenhum modelo.
+
+    Baseline minimo que o HAR-RV ajustado por OLS precisa bater pra
+    justificar usar regressao em vez de so projetar a RV recente pra
+    frente. Se HAR-RV perder pra isso, o problema esta na estimacao/
+    especificacao do modelo, nao na falta de sinal na feature.
+    """
+    return np.sqrt(dataset["rv_m"] * TRADING_DAYS_PER_YEAR) * 100
+
+
+def evaluate_persistence(dataset: pd.DataFrame) -> dict:
+    """RMSE/MAE/R2 do baseline de persistencia (sem ajuste de modelo) no
+    mesmo `dataset` (tipicamente um fold de teste)."""
+    pred = persistence_forecast(dataset)
+    err = dataset["target"].to_numpy() - pred.to_numpy()
+    ss_res = float((err**2).sum())
+    ss_tot = float(((dataset["target"] - dataset["target"].mean()) ** 2).sum())
     return {
         "rmse": float(np.sqrt((err**2).mean())),
         "mae": float(np.abs(err).mean()),
