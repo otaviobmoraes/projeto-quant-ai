@@ -31,12 +31,21 @@ def run_purged_ablation(
     embargo_days: int = 5,
     log_target: bool = True,
     news_smooth_window: int | None = 21,
+    daily_variance: pd.Series | None = None,
 ) -> dict:
     """Ajusta o HAR-RV baseline e a versao com noticia em cada fold do
     walk-forward purgado e agrega (media) as metricas fora da amostra.
+
+    `daily_variance`: ver vol.forecast.build_dataset -- permite usar um
+    estimador de RV melhor (ex.: Parkinson) em vez do proxy de retorno de
+    fechamento.
     """
     dataset = build_dataset(
-        prices, news=news, horizon=horizon, news_smooth_window=news_smooth_window
+        prices,
+        news=news,
+        horizon=horizon,
+        news_smooth_window=news_smooth_window,
+        daily_variance=daily_variance,
     )
     folds = purged_walk_forward_splits(
         dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
@@ -74,10 +83,23 @@ def load_and_run_purged_ablation(
     query: str | None = None,
     log_target: bool = True,
     news_smooth_window: int | None = 21,
+    use_parkinson: bool = False,
 ) -> dict:
     """Le o PTAX e o tom do GDELT ja coletados (data/ptax.py, data/gdelt_news.py)
-    e roda a avaliacao final (walk-forward purgado) da ablacao."""
-    prices, news = load_prices_and_news(tipo, query)
+    e roda a avaliacao final (walk-forward purgado) da ablacao.
+
+    `use_parkinson=True`: usa o estimador de Parkinson via fx_spot (OHLC) em
+    vez do proxy de retorno de fechamento do PTAX -- baseline preferencial
+    (RMSE menor em todos os folds testados no diagnostico do backtest).
+    """
+    ptax_prices, news = load_prices_and_news(tipo, query)
+    if use_parkinson:
+        from vol.realized import load_parkinson_prices_and_variance
+
+        prices, daily_variance = load_parkinson_prices_and_variance()
+    else:
+        prices, daily_variance = ptax_prices, None
+
     return run_purged_ablation(
         prices,
         news,
@@ -86,4 +108,5 @@ def load_and_run_purged_ablation(
         embargo_days=embargo_days,
         log_target=log_target,
         news_smooth_window=news_smooth_window,
+        daily_variance=daily_variance,
     )

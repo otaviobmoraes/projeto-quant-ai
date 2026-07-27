@@ -220,12 +220,22 @@ def run_ablation_cv(
     n_splits: int = 5,
     log_target: bool = True,
     news_smooth_window: int | None = 21,
+    daily_variance: pd.Series | None = None,
 ) -> dict:
     """Versao com validacao cruzada expansiva do run_ablation: ajusta baseline
     e com-noticia em cada fold e agrega (media) as metricas fora da amostra,
     alem de devolver o detalhe por fold para inspecao.
+
+    `daily_variance`: ver build_dataset -- permite usar um estimador de RV
+    melhor (ex.: Parkinson) em vez do proxy de retorno de fechamento.
     """
-    dataset = build_dataset(prices, news=news, horizon=horizon, news_smooth_window=news_smooth_window)
+    dataset = build_dataset(
+        prices,
+        news=news,
+        horizon=horizon,
+        news_smooth_window=news_smooth_window,
+        daily_variance=daily_variance,
+    )
     folds = expanding_window_splits(dataset, n_splits=n_splits)
 
     per_fold = {"baseline": [], "com_noticia": []}
@@ -283,11 +293,25 @@ def load_and_run_ablation_cv(
     query: str | None = None,
     log_target: bool = True,
     news_smooth_window: int | None = 21,
+    use_parkinson: bool = False,
 ) -> dict:
     """Equivalente a load_and_run_ablation, mas usando run_ablation_cv
     (validacao cruzada expansiva) em vez de um unico split treino/teste.
+
+    `use_parkinson=True`: usa o estimador de Parkinson via fx_spot (OHLC,
+    data/fx_spot.py) em vez do proxy de retorno de fechamento do PTAX --
+    adotado como baseline preferencial (RMSE menor em todos os folds
+    testados no diagnostico do backtest). A serie de noticia (GDELT) e
+    sempre lida via data.gdelt_news, independente da fonte de preco/variancia.
     """
-    prices, news = load_prices_and_news(tipo, query)
+    ptax_prices, news = load_prices_and_news(tipo, query)
+    if use_parkinson:
+        from vol.realized import load_parkinson_prices_and_variance
+
+        prices, daily_variance = load_parkinson_prices_and_variance()
+    else:
+        prices, daily_variance = ptax_prices, None
+
     return run_ablation_cv(
         prices,
         news,
@@ -295,4 +319,5 @@ def load_and_run_ablation_cv(
         n_splits=n_splits,
         log_target=log_target,
         news_smooth_window=news_smooth_window,
+        daily_variance=daily_variance,
     )

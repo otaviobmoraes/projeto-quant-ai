@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from data.fx_spot import PROCESSED_PATH as FX_SPOT_PROCESSED_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 
 TRADING_DAYS_PER_YEAR = 252
@@ -56,6 +57,22 @@ def parkinson_vol(
     de `window` dias uteis de variancia diaria tipo Parkinson."""
     daily_var = parkinson_daily_variance(high, low)
     return np.sqrt(daily_var.rolling(window).mean() * annualization_factor) * 100
+
+
+def load_parkinson_prices_and_variance() -> tuple[pd.Series, pd.Series]:
+    """Le o fx_spot ja coletado (data/fx_spot.py, com OHLC) e devolve
+    (close, daily_variance) usando o estimador de Parkinson em vez do proxy
+    de retorno de fechamento -- ADOTADO como baseline preferencial: RMSE
+    consistentemente menor em TODOS os folds testados no diagnostico do
+    backtest (ver commit do diagnostico), nao so na media.
+    """
+    if not FX_SPOT_PROCESSED_PATH.exists():
+        raise FileNotFoundError(
+            f"{FX_SPOT_PROCESSED_PATH} nao encontrado -- rode data.fx_spot primeiro."
+        )
+    fx = pd.read_parquet(FX_SPOT_PROCESSED_PATH).set_index("date").sort_index()
+    variance = parkinson_daily_variance(fx["high"], fx["low"])
+    return fx["close"], variance
 
 
 def load_ptax_realized_vol(window: int = 21, tipo: str = "venda") -> pd.DataFrame:

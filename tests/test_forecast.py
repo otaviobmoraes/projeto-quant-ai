@@ -264,3 +264,40 @@ def test_load_and_run_ablation_cv_reads_processed_parquets(tmp_path, monkeypatch
 
     assert result["n_splits"] == 3
     assert "baseline" in result and "com_noticia" in result
+
+
+def test_load_and_run_ablation_cv_use_parkinson_reads_fx_spot(tmp_path, monkeypatch):
+    prices = _price_series(400, seed=13)
+    ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
+    ptax_path = tmp_path / "ptax.parquet"
+    ptax_df.to_parquet(ptax_path)
+
+    tone_df = pd.DataFrame(
+        {"date": prices.index, "tone": np.random.default_rng(14).normal(0, 1, len(prices)), "query": "Brazil"}
+    )
+    tone_path = tmp_path / "gdelt_tone.parquet"
+    tone_df.to_parquet(tone_path)
+
+    rng = np.random.default_rng(15)
+    noise = np.abs(rng.normal(0, 0.003, len(prices)))
+    fx_df = pd.DataFrame(
+        {
+            "date": prices.index,
+            "open": prices.to_numpy(),
+            "high": prices.to_numpy() * (1 + noise),
+            "low": prices.to_numpy() * (1 - noise),
+            "close": prices.to_numpy(),
+        }
+    )
+    fx_path = tmp_path / "fx_spot.parquet"
+    fx_df.to_parquet(fx_path)
+
+    monkeypatch.setattr(forecast, "PTAX_PROCESSED_PATH", ptax_path)
+    monkeypatch.setattr(forecast, "TONE_PROCESSED_PATH", tone_path)
+    import vol.realized as realized_module
+
+    monkeypatch.setattr(realized_module, "FX_SPOT_PROCESSED_PATH", fx_path)
+
+    result = forecast.load_and_run_ablation_cv(horizon=21, n_splits=3, query="Brazil", use_parkinson=True)
+
+    assert "baseline" in result and "com_noticia" in result

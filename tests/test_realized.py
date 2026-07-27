@@ -111,3 +111,35 @@ def test_parkinson_vol_scales_with_annualization_factor():
 
     ratio = (vol_252 / vol_1).dropna()
     assert ratio.apply(lambda x: x == pytest.approx(np.sqrt(252), rel=1e-6)).all()
+
+
+def test_load_parkinson_prices_and_variance_reads_fx_spot(tmp_path, monkeypatch):
+    idx = pd.date_range("2024-01-01", periods=30, tz="America/Sao_Paulo")
+    rng = np.random.default_rng(0)
+    close = 5.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 30)))
+    noise = np.abs(rng.normal(0, 0.003, 30))
+    fx_df = pd.DataFrame(
+        {
+            "date": idx,
+            "open": close,
+            "high": close * (1 + noise),
+            "low": close * (1 - noise),
+            "close": close,
+        }
+    )
+    path = tmp_path / "fx_spot.parquet"
+    fx_df.to_parquet(path)
+    monkeypatch.setattr(realized, "FX_SPOT_PROCESSED_PATH", path)
+
+    close_out, variance = realized.load_parkinson_prices_and_variance()
+
+    assert len(close_out) == 30
+    assert len(variance) == 30
+    assert (variance >= 0).all()
+
+
+def test_load_parkinson_prices_and_variance_missing_file_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(realized, "FX_SPOT_PROCESSED_PATH", tmp_path / "missing.parquet")
+
+    with pytest.raises(FileNotFoundError):
+        realized.load_parkinson_prices_and_variance()

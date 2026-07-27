@@ -89,6 +89,38 @@ def test_load_and_run_credibility_ablation_reads_processed_parquets(tmp_path, mo
     assert "baseline" in result and "com_credibilidade" in result
 
 
+def test_load_and_run_credibility_ablation_use_parkinson_reads_fx_spot(tmp_path, monkeypatch):
+    prices = _price_series(400, seed=6)
+    credibility_df = _credibility_df(prices.index, theta=0.5, dispersion=0.4)
+    credibility_path = tmp_path / "credibility.parquet"
+    credibility_df.to_parquet(credibility_path)
+
+    rng = np.random.default_rng(10)
+    noise = np.abs(rng.normal(0, 0.003, len(prices)))
+    fx_df = pd.DataFrame(
+        {
+            "date": prices.index,
+            "open": prices.to_numpy(),
+            "high": prices.to_numpy() * (1 + noise),
+            "low": prices.to_numpy() * (1 - noise),
+            "close": prices.to_numpy(),
+        }
+    )
+    fx_path = tmp_path / "fx_spot.parquet"
+    fx_df.to_parquet(fx_path)
+
+    import vol.realized as realized_module
+
+    monkeypatch.setattr(ablation, "CREDIBILITY_PROCESSED_PATH", credibility_path)
+    monkeypatch.setattr(realized_module, "FX_SPOT_PROCESSED_PATH", fx_path)
+
+    result = ablation.load_and_run_credibility_ablation(
+        horizon=21, n_splits=3, embargo_days=5, use_parkinson=True
+    )
+
+    assert "baseline" in result and "com_credibilidade" in result
+
+
 def test_load_and_run_credibility_ablation_missing_files_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", tmp_path / "missing_ptax.parquet")
     monkeypatch.setattr(ablation, "CREDIBILITY_PROCESSED_PATH", tmp_path / "missing_cred.parquet")
