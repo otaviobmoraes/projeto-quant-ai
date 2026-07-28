@@ -108,6 +108,22 @@ def test_run_ablation_recovers_signal_when_news_is_informative():
     assert result["n_train"] > 0 and result["n_test"] > 0
 
 
+def test_predict_matches_evaluate_internals():
+    prices = _price_series(200, seed=20)
+    dataset = forecast.build_dataset(prices, horizon=21)
+    train, test = forecast.chronological_split(dataset, test_size=0.2)
+
+    model = forecast.fit_har(train, forecast.BASELINE_FEATURES, log_target=True)
+    pred = forecast.predict(model, test, forecast.BASELINE_FEATURES, log_target=True)
+
+    # evaluate() usa a mesma previsao internamente -- reconstruindo o RMSE a
+    # partir de predict() ele bate com o RMSE reportado por evaluate().
+    result = forecast.evaluate(model, test, forecast.BASELINE_FEATURES, log_target=True)
+    manual_rmse = float(np.sqrt(((test["target"] - pred) ** 2).mean()))
+    assert manual_rmse == pytest.approx(result["rmse"])
+    assert pred.index.equals(test.index)
+
+
 def test_persistence_forecast_matches_manual_calc():
     dataset = pd.DataFrame({"rv_m": [0.0001, 0.0004], "target": [10.0, 20.0]})
     pred = forecast.persistence_forecast(dataset)

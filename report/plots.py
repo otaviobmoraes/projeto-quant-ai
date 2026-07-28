@@ -28,6 +28,9 @@ DIVERGING_BLUE = "#2a78d6"
 DIVERGING_RED = "#e34948"
 DIVERGING_NEUTRAL = "#f0efec"
 
+STATUS_GOOD = "#0ca30c"
+STATUS_CRITICAL = "#d03b3b"
+
 
 def _break_gaps(series: pd.Series, max_gap_days: int = 5) -> pd.Series:
     """Insere NaN nos pontos logo apos um gap > `max_gap_days` na serie, pra
@@ -131,6 +134,39 @@ def plot_ablation_folds(
     ax.set_xticklabels([f"Fold {i+1}" for i in x], color=COLOR_MUTED, fontsize=9)
     ax.set_ylabel(metric, color=COLOR_SECONDARY_INK, fontsize=10)
     ax.set_title("Ablacao HAR-RV por fold (walk-forward purgado)", color=COLOR_PRIMARY_INK, fontsize=12, loc="left")
+    ax.legend(frameon=False, fontsize=9, labelcolor=COLOR_SECONDARY_INK)
+    fig.tight_layout()
+    return fig
+
+
+def plot_cumulative_pnl(trades: pd.DataFrame, title: str = "P&L acumulado do backtest (ilustrativo)") -> Figure:
+    """Curva de patrimonio (soma cumulativa do pnl_net por trade, no eixo x
+    pela data de saida) + marcadores coloridos por resultado do trade
+    (ganho/perda) -- convencao de cor "status", nao categorica (ver skill
+    de dataviz: bom/ruim usa a paleta de status, nao os slots de serie).
+    """
+    ordered = trades.sort_values("exit_date")
+    cumulative = ordered["pnl_net"].cumsum()
+
+    fig, ax = _new_axes()
+    ax.plot(ordered["exit_date"], cumulative.to_numpy(), color=COLOR_SECONDARY_INK, linewidth=1.6, zorder=2)
+    ax.axhline(0, color=COLOR_BASELINE_AXIS, linewidth=1.0, zorder=1)
+
+    wins = ordered["pnl_net"] > 0
+    ax.scatter(
+        ordered.loc[wins, "exit_date"], cumulative[wins], color=STATUS_GOOD, s=28, zorder=3, label="Trade com lucro"
+    )
+    ax.scatter(
+        ordered.loc[~wins, "exit_date"],
+        cumulative[~wins],
+        color=STATUS_CRITICAL,
+        s=28,
+        zorder=3,
+        label="Trade com prejuizo",
+    )
+
+    ax.set_ylabel("PnL acumulado (unidades do modelo)", color=COLOR_SECONDARY_INK, fontsize=10)
+    ax.set_title(title, color=COLOR_PRIMARY_INK, fontsize=12, loc="left")
     ax.legend(frameon=False, fontsize=9, labelcolor=COLOR_SECONDARY_INK)
     fig.tight_layout()
     return fig

@@ -65,6 +65,23 @@ def test_plot_series_returns_single_line_figure():
     assert len(ax.lines) == 1
 
 
+def test_plot_cumulative_pnl_has_line_and_win_loss_markers():
+    idx = pd.date_range("2026-01-01", periods=4, freq="D")
+    trades = pd.DataFrame(
+        {
+            "exit_date": idx,
+            "pnl_net": [10.0, -5.0, 3.0, -1.0],
+        }
+    )
+
+    fig = plots.plot_cumulative_pnl(trades)
+    ax = fig.axes[0]
+
+    assert len(ax.lines) == 2  # curva de pnl acumulado + linha de zero
+    assert len(ax.collections) == 2  # scatter de ganhos + scatter de perdas
+    assert ax.get_legend() is not None
+
+
 def test_break_gaps_inserts_nan_after_large_gap():
     idx = pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-20", "2026-01-21"])
     series = pd.Series([1.0, 2.0, 3.0, 4.0], index=idx)

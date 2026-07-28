@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from backtest import ablation
+from backtest import ablation, engine
 from credibility import ablation as credibility_ablation
 from data.gdelt_news import TONE_PROCESSED_PATH
 from data.iv_surface import PROCESSED_PATH as IV_PROCESSED_PATH
@@ -21,6 +21,7 @@ from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 from report import plots, summary
 from strategy import signal, sizing
 from vol import implied, realized
+from vol.forecast import BASELINE_FEATURES, build_dataset
 
 OUT_DIR = Path(__file__).resolve().parent / "output"
 
@@ -140,6 +141,8 @@ def main() -> None:
 
     _print_header("3. Graficos historicos")
     fx_df = pd.read_parquet(realized.FX_SPOT_PROCESSED_PATH).set_index("date").sort_index()
+    close = fx_df["close"]
+    daily_variance = realized.parkinson_daily_variance(fx_df["high"], fx_df["low"])
     rv_series = realized.parkinson_vol(fx_df["high"], fx_df["low"], window=21).dropna()
     fig = plots.plot_series(
         rv_series,
@@ -172,6 +175,54 @@ def main() -> None:
         print(f"IV ATM (21d):        {iv_today['iv_atm_pct']:.2f}%")
         print(f"Sinal:               {label}")
         print(f"Straddles p/ vega alvo R$1000/ponto: {n:,.0f}")
+    else:
+        print("Superficie de IV ainda nao coletada -- rode data.iv_surface primeiro.")
+
+    _print_header("5. Backtest de P&L (ILUSTRATIVO -- ver aviso abaixo)")
+    if IV_PROCESSED_PATH.exists():
+        print(
+            "AVISO: a B3 so publica o snapshot do dia da superficie de IV (sem historico\n"
+            "pra download) -- so ha 1 dia real de IV conhecido. A IV de ENTRADA de cada\n"
+            "trade abaixo e uma PROXY (RV Parkinson trailing x premio de risco fixo,\n"
+            "calibrado nesse unico dia real). O preco de entrada/saida e o payoff\n"
+            "terminal usam dado 100% real. Resultado ILUSTRATIVO -- testa o motor e da\n"
+            "uma nocao de ordem de grandeza, NAO e evidencia de lucro real.\n"
+        )
+
+        dataset = build_dataset(close, horizon=21, daily_variance=daily_variance)
+        rv_forecast = engine.generate_oos_rv_forecast(
+            dataset, BASELINE_FEATURES, horizon=21, n_splits=5, embargo_days=5
+        )
+
+        iv_df = implied.load_iv_atm_processed(target_days=21)
+        calib_date = iv_df["refdate"].iloc[-1]
+        iv_real = iv_df["iv_atm_pct"].iloc[-1]
+        rv_calib_idx = rv_series.index.asof(calib_date)
+        risk_premium = engine.calibrate_risk_premium(rv_series.loc[rv_calib_idx], iv_real)
+        iv_proxy_series = engine.proxy_iv(rv_series, risk_premium)
+
+        print(f"Calibracao: {calib_date.date()}  IV_real={iv_real:.2f}%  "
+              f"RV_trailing={rv_series.loc[rv_calib_idx]:.2f}%  premio_de_risco={risk_premium:.3f}x")
+
+        trades = engine.run_backtest(
+            close, rv_forecast, iv_proxy_series, horizon=21, band_pct=1.0, target_vega=1000.0, spread_pct=0.05
+        )
+        stats = engine.summarize_backtest(trades, horizon=21)
+
+        if stats["n_trades"] > 0:
+            print()
+            print(f"Trades: {stats['n_trades']} ({stats['n_long_vol']} compra vol, {stats['n_short_vol']} venda vol)")
+            print(f"Taxa de acerto: {stats['win_rate']:.1%}")
+            print(f"PnL total (unidades do modelo): {stats['total_pnl']:,.0f}")
+            print(f"PnL medio por trade: {stats['avg_pnl']:,.0f}  (desvio: {stats['pnl_std']:,.0f})")
+            print(f"Sharpe (anualizado): {stats['sharpe']:.3f}")
+
+            trades.to_csv(OUT_DIR / "backtest_trades.csv", index=False)
+            fig = plots.plot_cumulative_pnl(trades)
+            fig.savefig(OUT_DIR / "backtest_pnl.png", dpi=150)
+            print(f"\nbacktest_trades.csv ({len(trades)} trades) e backtest_pnl.png salvos.")
+        else:
+            print("Nenhum trade gerado com esses parametros.")
     else:
         print("Superficie de IV ainda nao coletada -- rode data.iv_surface primeiro.")
 

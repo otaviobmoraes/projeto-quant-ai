@@ -119,6 +119,20 @@ def fit_har(train: pd.DataFrame, feature_cols: list[str], log_target: bool = Fal
     return sm.OLS(y, X).fit()
 
 
+def predict(model, data: pd.DataFrame, feature_cols: list[str], log_target: bool = False) -> pd.Series:
+    """Previsao do modelo pros dados informados, na escala original de RV
+    (desfaz o log com exp se log_target=True). Irmã de `evaluate`, mas
+    devolve a previsao crua em vez de agregar em RMSE/MAE/R2 -- usada pra
+    montar o "historico de previsoes fora da amostra" que alimenta o
+    backtest de P&L (backtest/engine.py).
+    """
+    X = sm.add_constant(data[feature_cols], has_constant="add")
+    pred = model.predict(X)
+    if log_target:
+        pred = np.exp(pred)
+    return pred.rename("rv_forecast")
+
+
 def evaluate(model, test: pd.DataFrame, feature_cols: list[str], log_target: bool = False) -> dict:
     """Avalia RMSE/MAE/R2 fora da amostra, sempre na escala original de RV
     (se `log_target=True`, desfaz o log da previsao com exp antes de comparar)
