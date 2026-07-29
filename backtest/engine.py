@@ -24,13 +24,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from backtest.metrics import sharpe_ratio
+from backtest.metrics import directional_accuracy, sharpe_ratio
 from backtest.walk_forward import purged_walk_forward_splits
 from backtest.costs import transaction_cost
 from strategy.signal import LONG_VOL, NO_TRADE, generate_signal
 from strategy.sizing import size_straddle
 from vol.black76 import call_price, put_price
-from vol.forecast import TRADING_DAYS_PER_YEAR, fit_har, predict
+from vol.forecast import TRADING_DAYS_PER_YEAR, fit_har, persistence_forecast, predict
 
 
 def generate_oos_rv_forecast(
@@ -57,6 +57,35 @@ def generate_oos_rv_forecast(
     if not preds:
         return pd.Series(dtype=float)
     return pd.concat(preds).sort_index()
+
+
+def evaluate_directional_accuracy_per_fold(
+    dataset: pd.DataFrame,
+    feature_cols: list[str],
+    horizon: int,
+    n_splits: int,
+    embargo_days: int,
+    log_target: bool = True,
+    reference: pd.Series | None = None,
+) -> list[dict]:
+    """Acuracia direcional (o modelo previu do lado certo de `reference`?)
+    fold a fold, nos mesmos folds purgados de generate_oos_rv_forecast.
+
+    `reference`: serie externa pra comparar (ex.: IV proxy). Se None, usa a
+    persistencia (RV atual, `vol.forecast.persistence_forecast`) como
+    referencia -- testa se o modelo acerta a DIRECAO da mudanca de RV, sem
+    depender de nenhuma proxy de IV.
+    """
+    folds = purged_walk_forward_splits(
+        dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
+    )
+    results = []
+    for train, test in folds:
+        model = fit_har(train, feature_cols, log_target=log_target)
+        pred = predict(model, test, feature_cols, log_target=log_target)
+        ref = reference.reindex(test.index) if reference is not None else persistence_forecast(test)
+        results.append(directional_accuracy(pred, test["target"], ref))
+    return results
 
 
 def calibrate_risk_premium(rv_at_calibration_date: float, iv_at_calibration_date: float) -> float:

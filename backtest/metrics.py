@@ -1,5 +1,5 @@
-"""Metricas robustas de avaliacao: Sharpe, Probabilistic Sharpe Ratio (PSR) e
-Deflated Sharpe Ratio (DSR).
+"""Metricas robustas de avaliacao: Sharpe, Probabilistic Sharpe Ratio (PSR),
+Deflated Sharpe Ratio (DSR) e acuracia direcional.
 
 Bailey, D. H. & Lopez de Prado, M. (2014), "The Deflated Sharpe Ratio:
 Correcting for Selection Bias, Backtest Overfitting, and Non-Normality".
@@ -10,6 +10,11 @@ Deflated Sharpe Ratio. Nao repetir o grid search cego da referencia de
 testadas (`n_trials`) -- sem isso, escolher a melhor entre N variantes e so
 reportar essa superestima sistematicamente a performance esperada fora da
 amostra (overfitting de selecao).
+
+`directional_accuracy`: a estrategia so precisa do SINAL de (RV previsto -
+referencia), nao da magnitude exata -- R2/RMSE punem erro de magnitude
+pesado mesmo quando o sinal de compra/venda de vol estaria certo. E uma
+metrica mais proxima do que a estrategia de fato precisa acertar.
 """
 
 from __future__ import annotations
@@ -17,7 +22,8 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from scipy.stats import norm
+import pandas as pd
+from scipy.stats import binomtest, norm
 
 EULER_MASCHERONI = 0.5772156649015329
 
@@ -76,3 +82,31 @@ def deflated_sharpe_ratio(
     """
     benchmark = expected_max_sharpe_ratio(sr_trials_std, n_trials)
     return probabilistic_sharpe_ratio(sr_hat, benchmark, n_obs, skew, kurtosis)
+
+
+def directional_accuracy(forecast: pd.Series, actual: pd.Series, reference: pd.Series) -> dict:
+    """O modelo "acerta" se prever corretamente de que lado de `reference` o
+    valor `actual` vai cair -- ex.: reference = RV atual (persistencia) ou
+    IV: o que importa pra estrategia e se RV_previsto e RV_realizado ficam
+    do MESMO LADO da referencia, nao se a magnitude prevista bate exata.
+
+    Inclui um teste binomial (H0: acerto = 50%, i.e. equivalente a cara ou
+    coroa) -- accuracy sozinha nao diz se o resultado e estatisticamente
+    diferente de sorte.
+    """
+    aligned = pd.concat(
+        [forecast.rename("forecast"), actual.rename("actual"), reference.rename("reference")],
+        axis=1,
+        join="inner",
+    ).dropna()
+
+    predicted_sign = np.sign(aligned["forecast"] - aligned["reference"])
+    actual_sign = np.sign(aligned["actual"] - aligned["reference"])
+    correct = predicted_sign == actual_sign
+
+    n = int(len(correct))
+    hits = int(correct.sum())
+    accuracy = hits / n if n > 0 else float("nan")
+    pvalue = float(binomtest(hits, n, 0.5).pvalue) if n > 0 else float("nan")
+
+    return {"n": n, "hits": hits, "accuracy": accuracy, "pvalue_vs_50pct": pvalue}

@@ -39,6 +39,42 @@ def test_generate_oos_rv_forecast_covers_test_folds_only():
     assert forecast_series.notna().all()
 
 
+def test_evaluate_directional_accuracy_per_fold_structure():
+    from vol.forecast import BASELINE_FEATURES, build_dataset
+
+    prices = _price_series(400, seed=1)
+    dataset = build_dataset(prices, horizon=21)
+
+    results = engine.evaluate_directional_accuracy_per_fold(
+        dataset, BASELINE_FEATURES, horizon=21, n_splits=4, embargo_days=5
+    )
+
+    assert len(results) <= 4
+    for r in results:
+        assert set(r.keys()) == {"n", "hits", "accuracy", "pvalue_vs_50pct"}
+        assert 0 <= r["accuracy"] <= 1
+
+
+def test_evaluate_directional_accuracy_per_fold_high_when_informative():
+    from vol.forecast import BASELINE_FEATURES, build_dataset
+
+    prices = _price_series(400, seed=1)
+    dataset = build_dataset(prices, horizon=21)
+
+    # Feature adicional perfeitamente correlacionada com o alvo (+ ruido
+    # minusculo) -- o modelo deve acertar a direcao quase sempre.
+    rng = np.random.default_rng(2)
+    dataset = dataset.copy()
+    dataset["rv_d"] = dataset["target"] + rng.normal(0, 0.001, len(dataset))
+
+    results = engine.evaluate_directional_accuracy_per_fold(
+        dataset, ["rv_d"], horizon=21, n_splits=4, embargo_days=5
+    )
+
+    mean_accuracy = np.mean([r["accuracy"] for r in results])
+    assert mean_accuracy > 0.8
+
+
 def test_run_backtest_no_trades_when_band_covers_everything():
     prices = _price_series(200, seed=2)
     idx = prices.index

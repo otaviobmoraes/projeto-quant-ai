@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from backtest import metrics
@@ -51,3 +52,47 @@ def test_deflated_sharpe_decreases_as_n_trials_increases():
         sr_hat=1.0, sr_trials_std=0.3, n_trials=500, n_obs=252
     )
     assert dsr_many_trials < dsr_few_trials
+
+
+def test_directional_accuracy_perfect_when_forecast_always_right_side():
+    idx = pd.date_range("2026-01-01", periods=5)
+    reference = pd.Series([10.0] * 5, index=idx)
+    forecast = pd.Series([12.0, 8.0, 15.0, 5.0, 11.0], index=idx)
+    actual = pd.Series([13.0, 7.0, 20.0, 2.0, 10.5], index=idx)  # mesmo lado de 10.0 que o forecast
+
+    result = metrics.directional_accuracy(forecast, actual, reference)
+    assert result["accuracy"] == pytest.approx(1.0)
+    assert result["n"] == 5
+    assert result["hits"] == 5
+
+
+def test_directional_accuracy_zero_when_forecast_always_wrong_side():
+    idx = pd.date_range("2026-01-01", periods=4)
+    reference = pd.Series([10.0] * 4, index=idx)
+    forecast = pd.Series([12.0, 8.0, 15.0, 5.0], index=idx)
+    actual = pd.Series([7.0, 13.0, 2.0, 20.0], index=idx)  # sempre o lado OPOSTO do forecast
+
+    result = metrics.directional_accuracy(forecast, actual, reference)
+    assert result["accuracy"] == pytest.approx(0.0)
+
+
+def test_directional_accuracy_pvalue_small_for_strong_signal():
+    idx = pd.date_range("2026-01-01", periods=40)
+    reference = pd.Series(10.0, index=idx)
+    rng = np.random.default_rng(0)
+    forecast = pd.Series(reference.to_numpy() + rng.normal(2, 0.1, 40), index=idx)
+    actual = pd.Series(reference.to_numpy() + rng.normal(2, 0.1, 40), index=idx)  # mesmo lado quase sempre
+
+    result = metrics.directional_accuracy(forecast, actual, reference)
+    assert result["accuracy"] > 0.9
+    assert result["pvalue_vs_50pct"] < 0.01
+
+
+def test_directional_accuracy_aligns_by_index_and_drops_missing():
+    idx = pd.date_range("2026-01-01", periods=5)
+    reference = pd.Series(10.0, index=idx)
+    forecast = pd.Series([12.0, 8.0, np.nan, 5.0, 11.0], index=idx)
+    actual = pd.Series([13.0, 7.0, 20.0, 2.0, 10.5], index=idx)
+
+    result = metrics.directional_accuracy(forecast, actual, reference)
+    assert result["n"] == 4  # a linha com NaN no forecast e descartada
