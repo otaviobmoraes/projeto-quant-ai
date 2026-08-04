@@ -24,8 +24,8 @@ def ablation_summary_md(
     lines = [
         "## Ablacao: RV baseline vs RV com noticia",
         "",
-        f"- **Baseline (HAR-RV)**: {format_metrics(result['baseline'])}",
-        f"- **Com noticia**: {format_metrics(result['com_noticia'])}",
+        f"- **Baseline (HAR-RV, R2 pooled)**: {format_metrics(result['baseline_pooled'])}",
+        f"- **Com noticia (R2 pooled)**: {format_metrics(result['com_noticia_pooled'])}",
         f"- Folds (walk-forward purgado): {n_folds}",
     ]
     if dsr is not None:

@@ -96,3 +96,56 @@ def test_directional_accuracy_aligns_by_index_and_drops_missing():
 
     result = metrics.directional_accuracy(forecast, actual, reference)
     assert result["n"] == 4  # a linha com NaN no forecast e descartada
+
+
+def test_pooled_oos_metrics_perfect_forecast_gives_r2_one():
+    idx = pd.date_range("2026-01-01", periods=10)
+    actual = pd.Series(np.arange(10.0), index=idx)
+
+    result = metrics.pooled_oos_metrics(actual, actual)
+
+    assert result["r2_oos"] == pytest.approx(1.0)
+    assert result["rmse"] == pytest.approx(0.0)
+    assert result["n_obs"] == 10
+
+
+def test_pooled_oos_metrics_naive_mean_forecast_gives_r2_zero():
+    idx = pd.date_range("2026-01-01", periods=10)
+    actual = pd.Series(np.arange(10.0), index=idx)
+    predicted = pd.Series(actual.mean(), index=idx)
+
+    result = metrics.pooled_oos_metrics(actual, predicted)
+
+    assert result["r2_oos"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_pooled_oos_metrics_more_stable_than_per_fold_average_with_small_folds():
+    # Replica o efeito que motivou a funcao: concatenar 2 "folds" pequenos com
+    # erro NORMAL (nao catastrofico) pode dar R2 por-fold explosivamente
+    # negativo so porque a media de cada fold pequeno e instavel -- pooled
+    # nao sofre disso.
+    idx1 = pd.date_range("2026-01-01", periods=4)
+    idx2 = pd.date_range("2026-02-01", periods=4)
+    actual1 = pd.Series([10.0, 10.1, 9.9, 10.05], index=idx1)  # quase constante
+    pred1 = actual1 + 0.05  # erro pequeno, mas ss_tot do fold e minusculo
+    actual2 = pd.Series([10.0, 12.0, 8.0, 11.0], index=idx2)  # variancia normal
+    pred2 = actual2 + 0.05
+
+    actual = pd.concat([actual1, actual2])
+    predicted = pd.concat([pred1, pred2])
+
+    result = metrics.pooled_oos_metrics(actual, predicted)
+
+    # erro absoluto pequeno e uniforme -> R2 pooled deve ficar proximo de 1,
+    # nao explodir negativo como aconteceria calculando R2 fold a fold.
+    assert result["r2_oos"] > 0.9
+
+
+def test_pooled_oos_metrics_aligns_by_index_and_drops_missing():
+    idx = pd.date_range("2026-01-01", periods=5)
+    actual = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0], index=idx)
+    predicted = pd.Series([1.0, np.nan, 3.0, 4.0, 5.0], index=idx)
+
+    result = metrics.pooled_oos_metrics(actual, predicted)
+
+    assert result["n_obs"] == 4

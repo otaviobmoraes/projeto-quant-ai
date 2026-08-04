@@ -13,8 +13,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import kurtosis as _kurtosis
+from scipy.stats import skew as _skew
 
 from backtest import ablation, engine
+from backtest.metrics import deflated_sharpe_ratio
 from backtest.walk_forward import purged_walk_forward_splits_by_step
 from credibility import ablation as credibility_ablation
 from data.gdelt_news import (
@@ -42,6 +45,17 @@ CONFIGS_TESTED = [
     "Diagnostico: HAR-RV com estimador Parkinson (OHLC) -- RMSE menor em TODOS os folds, adotado como baseline oficial",
     "Fase 6 (final v2, oficial): walk-forward PURGADO 5 folds + embargo 5d, noticia suavizada 21d, log-RV, variancia Parkinson",
     "Credibilidade Tier 1: theta_baseline + dispersao (Focus/meta), log-RV, variancia Parkinson",
+    "Risco fiscal (GDELT, % de cobertura, nivel bruto) -- nao ajuda",
+    "Risco fiscal (surpresa/z-score, janela 63d) -- nao ajuda",
+    "Risco fiscal (surpresa/z-score, janela 21d) -- efeito marginal, dentro do ruido",
+    "Diagnostico R2: media por fold vs POOLED -- media por fold e instavel com "
+    "folds pequenos (explode negativo); adotado R2 pooled como metrica oficial",
+    "Sweep de esquema de walk-forward (5/8/10 folds fixos + 6 variantes de "
+    "step_size) com R2 pooled -- so 1 config bateu persistencia (378d/42d), "
+    "vizinhos proximos NAO bateram -- rejeitado como selecao de config por sorte, "
+    "mantido 5 folds fixos como esquema oficial",
+    "HAR-RV + termo de leverage (rv_d x indicador de retorno negativo) -- sem "
+    "efeito (multicolinearidade com rv_d/rv_w/rv_m)",
 ]
 
 
@@ -58,9 +72,17 @@ def build_verdict(result: dict, comparison_key: str = "com_noticia", comparison_
     """Veredito em linguagem simples: o modelo previu bem? A camada extra
     (noticia ou credibilidade) ajudou? Pura funcao de dados -- nao faz I/O,
     so interpreta o resultado da ablacao.
+
+    Le o R2 POOLED (backtest.metrics.pooled_oos_metrics, concatena as
+    previsoes de todos os folds antes de calcular) como numero principal --
+    o R2 medio por fold (`result["baseline"]`) fica instavel com folds
+    pequenos (a media de cada fold, usada como referencia do R2, tem alta
+    variancia amostral) e pode exagerar o quao ruim o modelo parece. A
+    contagem de "melhora em N de M folds" continua usando o R2 por fold, que
+    ainda serve bem pra esse proposito especifico (robustez/consistencia).
     """
-    baseline_r2 = result["baseline"]["r2_oos"]
-    other_r2 = result[comparison_key]["r2_oos"]
+    baseline_r2 = result["baseline_pooled"]["r2_oos"]
+    other_r2 = result[f"{comparison_key}_pooled"]["r2_oos"]
     delta = other_r2 - baseline_r2
 
     if baseline_r2 < 0:
@@ -114,8 +136,8 @@ def main() -> None:
     result = ablation.load_and_run_purged_ablation(
         horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
     )
-    print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(result['baseline'])}")
-    print(f"Com noticia:                   {summary.format_metrics(result['com_noticia'])}")
+    print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(result['baseline_pooled'])}")
+    print(f"Com noticia:                   {summary.format_metrics(result['com_noticia_pooled'])}")
 
     md = summary.ablation_summary_md(result, CONFIGS_TESTED)
     (OUT_DIR / "ablation_summary.md").write_text(md, encoding="utf-8")
@@ -131,8 +153,8 @@ def main() -> None:
         cred_result = credibility_ablation.load_and_run_credibility_ablation(
             horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
         )
-        print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(cred_result['baseline'])}")
-        print(f"Com credibilidade:             {summary.format_metrics(cred_result['com_credibilidade'])}")
+        print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(cred_result['baseline_pooled'])}")
+        print(f"Com credibilidade:             {summary.format_metrics(cred_result['com_credibilidade_pooled'])}")
         print()
         print(
             build_verdict(
@@ -153,8 +175,8 @@ def main() -> None:
             fiscal_result = ablation.load_and_run_fiscal_risk_ablation(
                 horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
             )
-            print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(fiscal_result['baseline'])}")
-            print(f"Com risco fiscal:              {summary.format_metrics(fiscal_result['com_noticia'])}")
+            print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(fiscal_result['baseline_pooled'])}")
+            print(f"Com risco fiscal:              {summary.format_metrics(fiscal_result['com_noticia_pooled'])}")
             print()
             print(
                 build_verdict(
@@ -180,8 +202,8 @@ def main() -> None:
             fiscal_v2_result = ablation.load_and_run_fiscal_risk_ablation_v2(
                 horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
             )
-            print(f"Baseline (HAR-RV, Parkinson):     {summary.format_metrics(fiscal_v2_result['baseline'])}")
-            print(f"Com risco fiscal refinado:        {summary.format_metrics(fiscal_v2_result['com_risco_fiscal_v2'])}")
+            print(f"Baseline (HAR-RV, Parkinson):     {summary.format_metrics(fiscal_v2_result['baseline_pooled'])}")
+            print(f"Com risco fiscal refinado:        {summary.format_metrics(fiscal_v2_result['com_risco_fiscal_v2_pooled'])}")
             print()
             print(
                 build_verdict(
@@ -287,6 +309,40 @@ def main() -> None:
             print(f"PnL total (unidades do modelo): {stats['total_pnl']:,.0f}")
             print(f"PnL medio por trade: {stats['avg_pnl']:,.0f}  (desvio: {stats['pnl_std']:,.0f})")
             print(f"Sharpe (anualizado): {stats['sharpe']:.3f}")
+
+            # Deflated Sharpe Ratio: varia a banda morta (band_pct) -- o
+            # hiperparametro mais natural da estrategia -- como familia de
+            # tentativas, e ajusta o Sharpe da config escolhida (1.0) pelo
+            # numero de variacoes testadas (guardrail do CLAUDE.md: registrar
+            # configuracoes testadas + DSR, nao so reportar a melhor sem
+            # disclosure).
+            band_pcts_tested = [0.5, 1.0, 1.5, 2.0]
+            trial_sharpes = [stats["sharpe"]]
+            for bp in band_pcts_tested:
+                if bp == 1.0:
+                    continue
+                t = engine.run_backtest(
+                    close, rv_forecast, iv_proxy_series, horizon=21, band_pct=bp,
+                    target_vega=1000.0, spread_pct=0.05,
+                )
+                s = engine.summarize_backtest(t, horizon=21)
+                if s["n_trades"] > 1:
+                    trial_sharpes.append(s["sharpe"])
+
+            if len(trial_sharpes) >= 2 and stats["n_trades"] > 1:
+                capital_at_risk = (trades["n_contracts"] * trades["premium"]).abs()
+                trade_returns = (trades["pnl_net"] / capital_at_risk).to_numpy()
+                dsr = deflated_sharpe_ratio(
+                    sr_hat=stats["sharpe"],
+                    sr_trials_std=float(np.std(trial_sharpes, ddof=1)),
+                    n_trials=len(trial_sharpes),
+                    n_obs=stats["n_trades"],
+                    skew=float(_skew(trade_returns)),
+                    kurtosis=float(_kurtosis(trade_returns, fisher=False)),
+                )
+                print(f"Deflated Sharpe Ratio: {dsr:.3f}  "
+                      f"(band_pct=1.0 escolhido entre {len(trial_sharpes)} variacoes testadas "
+                      f"{band_pcts_tested}, Sharpes={[round(s, 2) for s in trial_sharpes]})")
 
             trades.to_csv(OUT_DIR / "backtest_trades.csv", index=False)
             fig = plots.plot_cumulative_pnl(trades)

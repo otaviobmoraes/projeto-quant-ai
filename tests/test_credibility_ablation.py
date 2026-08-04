@@ -38,6 +38,8 @@ def test_run_credibility_ablation_structure():
     assert "per_fold" in result
     assert set(result["baseline"]) == {"rmse", "mae", "r2_oos"}
     assert set(result["com_credibilidade"]) == {"rmse", "mae", "r2_oos"}
+    assert set(result["baseline_pooled"]) == {"rmse", "mae", "r2_oos", "n_obs"}
+    assert "com_credibilidade_pooled" in result
 
 
 def test_run_credibility_ablation_recovers_signal_when_theta_is_informative():

@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import pooled_oos_metrics
 from backtest.walk_forward import purged_walk_forward_splits
 from data.gdelt_news import fiscal_risk_surprise, load_fiscal_risk_series
 from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
@@ -24,6 +25,7 @@ from vol.forecast import (
     forward_target_from_variance,
     har_features_from_variance,
     load_prices_and_news,
+    predict,
 )
 from vol.realized import log_returns
 
@@ -53,6 +55,13 @@ def run_purged_ablation(
     de reestimacao diferente (ex.: `purged_walk_forward_splits_by_step`,
     reestimando todo mes em vez de so 5 vezes) sem duplicar a logica de
     ajuste/avaliacao por fold.
+
+    O resultado traz DUAS versoes de R2/RMSE/MAE: `baseline`/`com_noticia`
+    (media simples do metrica por fold -- fica instavel com folds pequenos,
+    ver backtest.metrics.pooled_oos_metrics) e `baseline_pooled`/
+    `com_noticia_pooled` (concatena as previsoes de todos os folds antes de
+    calcular -- mais robusto, e a metrica que deve ser lida como "resultado
+    principal").
     """
     dataset = build_dataset(
         prices,
@@ -69,6 +78,7 @@ def run_purged_ablation(
         raise ValueError("nenhum fold valido -- dataset pequeno demais para esses parametros")
 
     per_fold = {"baseline": [], "com_noticia": []}
+    baseline_preds, news_preds = [], []
     for train, test in folds:
         baseline_model = fit_har(train, BASELINE_FEATURES, log_target=log_target)
         news_model = fit_har(train, NEWS_FEATURES, log_target=log_target)
@@ -78,13 +88,20 @@ def run_purged_ablation(
         per_fold["com_noticia"].append(
             evaluate(news_model, test, NEWS_FEATURES, log_target=log_target)
         )
+        baseline_preds.append(predict(baseline_model, test, BASELINE_FEATURES, log_target=log_target))
+        news_preds.append(predict(news_model, test, NEWS_FEATURES, log_target=log_target))
 
     def _mean_metrics(results: list[dict]) -> dict:
         return {k: float(np.mean([r[k] for r in results])) for k in results[0]}
 
+    baseline_forecast = pd.concat(baseline_preds).sort_index()
+    news_forecast = pd.concat(news_preds).sort_index()
+
     return {
         "baseline": _mean_metrics(per_fold["baseline"]),
         "com_noticia": _mean_metrics(per_fold["com_noticia"]),
+        "baseline_pooled": pooled_oos_metrics(dataset["target"], baseline_forecast),
+        "com_noticia_pooled": pooled_oos_metrics(dataset["target"], news_forecast),
         "per_fold": per_fold,
         "n_splits": len(folds),
     }
@@ -275,6 +292,7 @@ def run_fiscal_risk_ablation_v2(
         raise ValueError("nenhum fold valido -- dataset pequeno demais para esses parametros")
 
     per_fold = {"baseline": [], "com_risco_fiscal_v2": []}
+    baseline_preds, fiscal_preds = [], []
     for train, test in folds:
         baseline_model = fit_har(train, BASELINE_FEATURES, log_target=log_target)
         fiscal_model = fit_har(train, FISCAL_RISK_FEATURES, log_target=log_target)
@@ -284,13 +302,20 @@ def run_fiscal_risk_ablation_v2(
         per_fold["com_risco_fiscal_v2"].append(
             evaluate(fiscal_model, test, FISCAL_RISK_FEATURES, log_target=log_target)
         )
+        baseline_preds.append(predict(baseline_model, test, BASELINE_FEATURES, log_target=log_target))
+        fiscal_preds.append(predict(fiscal_model, test, FISCAL_RISK_FEATURES, log_target=log_target))
 
     def _mean_metrics(results: list[dict]) -> dict:
         return {k: float(np.mean([r[k] for r in results])) for k in results[0]}
 
+    baseline_forecast = pd.concat(baseline_preds).sort_index()
+    fiscal_forecast = pd.concat(fiscal_preds).sort_index()
+
     return {
         "baseline": _mean_metrics(per_fold["baseline"]),
         "com_risco_fiscal_v2": _mean_metrics(per_fold["com_risco_fiscal_v2"]),
+        "baseline_pooled": pooled_oos_metrics(dataset["target"], baseline_forecast),
+        "com_risco_fiscal_v2_pooled": pooled_oos_metrics(dataset["target"], fiscal_forecast),
         "per_fold": per_fold,
         "n_splits": len(folds),
     }

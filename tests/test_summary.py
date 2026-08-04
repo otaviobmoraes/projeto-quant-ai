@@ -8,12 +8,18 @@ def test_format_metrics_contains_all_fields():
     assert "R2_oos=-0.500" in text
 
 
-def test_ablation_summary_md_lists_configs_and_metrics():
-    result = {
+def _fake_ablation_result(n_splits: int = 5) -> dict:
+    return {
         "baseline": {"rmse": 2.0, "mae": 1.5, "r2_oos": -0.1},
         "com_noticia": {"rmse": 1.9, "mae": 1.4, "r2_oos": -0.05},
-        "n_splits": 5,
+        "baseline_pooled": {"rmse": 2.0, "mae": 1.5, "r2_oos": -0.1, "n_obs": 500},
+        "com_noticia_pooled": {"rmse": 1.9, "mae": 1.4, "r2_oos": -0.05, "n_obs": 500},
+        "n_splits": n_splits,
     }
+
+
+def test_ablation_summary_md_lists_configs_and_metrics():
+    result = _fake_ablation_result()
     configs = ["log_target=True", "news_smooth_window=21", "horizon=21"]
 
     text = summary.ablation_summary_md(result, configs)
@@ -27,13 +33,13 @@ def test_ablation_summary_md_lists_configs_and_metrics():
 
 
 def test_ablation_summary_md_includes_dsr_when_provided():
-    result = {"baseline": {"rmse": 2.0, "mae": 1.5, "r2_oos": -0.1}, "com_noticia": {"rmse": 1.9, "mae": 1.4, "r2_oos": -0.05}, "n_splits": 5}
+    result = _fake_ablation_result()
     text = summary.ablation_summary_md(result, ["cfg1"], dsr=0.42)
     assert "Deflated Sharpe Ratio" in text
     assert "0.420" in text
 
 
 def test_ablation_summary_md_omits_dsr_when_not_provided():
-    result = {"baseline": {"rmse": 2.0, "mae": 1.5, "r2_oos": -0.1}, "com_noticia": {"rmse": 1.9, "mae": 1.4, "r2_oos": -0.05}, "n_splits": 5}
+    result = _fake_ablation_result()
     text = summary.ablation_summary_md(result, ["cfg1"])
     assert "Deflated Sharpe Ratio" not in text

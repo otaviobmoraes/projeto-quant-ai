@@ -23,3 +23,6 @@ yfinance
 pytest
 black
 ruff
+
+# Geracao de relatorios/documentacao (.docx)
+python-docx

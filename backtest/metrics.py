@@ -84,6 +84,35 @@ def deflated_sharpe_ratio(
     return probabilistic_sharpe_ratio(sr_hat, benchmark, n_obs, skew, kurtosis)
 
 
+def pooled_oos_metrics(actual: pd.Series, predicted: pd.Series) -> dict:
+    """RMSE/MAE/R2 fora da amostra POOLED: concatena as previsoes de TODOS os
+    folds do walk-forward antes de calcular, em vez de calcular R2 fold a
+    fold e tirar a media (o que `vol.forecast.evaluate` faz).
+
+    Por que isso importa: o R2 por fold usa a MEDIA DAQUELE FOLD como
+    referencia (`ss_tot`). Com folds pequenos (poucas dezenas de
+    observacoes, ex.: reestimacao mensal), essa media fica instavel e o R2
+    de um fold isolado pode explodir para valores extremamente negativos
+    mesmo com erro absoluto pequeno -- e a media desses R2 instaveis fica
+    dominada pelos piores folds, exagerando o quao "quebrado" o modelo
+    parece. R2 pooled usa a media de TODO o periodo fora da amostra como
+    referencia unica -- e o padrao em avaliacao de ML financeiro (ex.: Gu,
+    Kelly & Xiu 2020, "Empirical Asset Pricing via Machine Learning") e bem
+    mais estavel a esse efeito de tamanho de fold.
+    """
+    combined = pd.concat([actual.rename("actual"), predicted.rename("predicted")], axis=1, join="inner").dropna()
+    aligned_actual, aligned_pred = combined["actual"], combined["predicted"]
+    err = aligned_actual - aligned_pred
+    ss_res = float((err**2).sum())
+    ss_tot = float(((aligned_actual - aligned_actual.mean()) ** 2).sum())
+    return {
+        "rmse": float(np.sqrt((err**2).mean())),
+        "mae": float(err.abs().mean()),
+        "r2_oos": 1 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
+        "n_obs": int(len(aligned_actual)),
+    }
+
+
 def directional_accuracy(forecast: pd.Series, actual: pd.Series, reference: pd.Series) -> dict:
     """O modelo "acerta" se prever corretamente de que lado de `reference` o
     valor `actual` vai cair -- ex.: reference = RV atual (persistencia) ou

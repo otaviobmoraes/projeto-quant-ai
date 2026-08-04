@@ -17,6 +17,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from backtest.metrics import pooled_oos_metrics
 from backtest.walk_forward import purged_walk_forward_splits
 from credibility.credibility import PROCESSED_PATH as CREDIBILITY_PROCESSED_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
@@ -25,6 +26,7 @@ from vol.forecast import (
     fit_har,
     forward_target_from_variance,
     har_features_from_variance,
+    predict,
 )
 from vol.realized import log_returns
 
@@ -83,6 +85,7 @@ def run_credibility_ablation(
         raise ValueError("nenhum fold valido -- dataset pequeno demais para esses parametros")
 
     per_fold = {"baseline": [], "com_credibilidade": []}
+    baseline_preds, cred_preds = [], []
     for train, test in folds:
         baseline_model = fit_har(train, BASELINE_FEATURES, log_target=log_target)
         cred_model = fit_har(train, CREDIBILITY_FEATURES, log_target=log_target)
@@ -92,13 +95,20 @@ def run_credibility_ablation(
         per_fold["com_credibilidade"].append(
             evaluate(cred_model, test, CREDIBILITY_FEATURES, log_target=log_target)
         )
+        baseline_preds.append(predict(baseline_model, test, BASELINE_FEATURES, log_target=log_target))
+        cred_preds.append(predict(cred_model, test, CREDIBILITY_FEATURES, log_target=log_target))
 
     def _mean_metrics(results: list[dict]) -> dict:
         return {k: float(np.mean([r[k] for r in results])) for k in results[0]}
 
+    baseline_forecast = pd.concat(baseline_preds).sort_index()
+    cred_forecast = pd.concat(cred_preds).sort_index()
+
     return {
         "baseline": _mean_metrics(per_fold["baseline"]),
         "com_credibilidade": _mean_metrics(per_fold["com_credibilidade"]),
+        "baseline_pooled": pooled_oos_metrics(dataset["target"], baseline_forecast),
+        "com_credibilidade_pooled": pooled_oos_metrics(dataset["target"], cred_forecast),
         "per_fold": per_fold,
         "n_splits": len(folds),
     }

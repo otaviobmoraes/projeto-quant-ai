@@ -5,6 +5,8 @@ def _result(baseline_r2, news_r2, per_fold_baseline, per_fold_news):
     return {
         "baseline": {"rmse": 1.0, "mae": 1.0, "r2_oos": baseline_r2},
         "com_noticia": {"rmse": 1.0, "mae": 1.0, "r2_oos": news_r2},
+        "baseline_pooled": {"rmse": 1.0, "mae": 1.0, "r2_oos": baseline_r2, "n_obs": 500},
+        "com_noticia_pooled": {"rmse": 1.0, "mae": 1.0, "r2_oos": news_r2, "n_obs": 500},
         "per_fold": {"baseline": per_fold_baseline, "com_noticia": per_fold_news},
     }
 

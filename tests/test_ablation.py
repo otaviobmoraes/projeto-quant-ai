@@ -26,6 +26,8 @@ def test_run_purged_ablation_structure():
     assert "per_fold" in result
     assert result["n_splits"] <= 4
     assert set(result["baseline"]) == {"rmse", "mae", "r2_oos"}
+    assert set(result["baseline_pooled"]) == {"rmse", "mae", "r2_oos", "n_obs"}
+    assert "com_noticia_pooled" in result
 
 
 def test_run_purged_ablation_recovers_signal_when_news_is_informative():
@@ -231,6 +233,7 @@ def test_run_fiscal_risk_ablation_v2_recovers_signal_when_informative():
     )
 
     assert result["baseline"]["r2_oos"] < result["com_risco_fiscal_v2"]["r2_oos"]
+    assert result["baseline_pooled"]["r2_oos"] < result["com_risco_fiscal_v2_pooled"]["r2_oos"]
 
 
 def test_load_and_run_fiscal_risk_ablation_v2_raises_when_sentiment_not_collected(tmp_path, monkeypatch):
