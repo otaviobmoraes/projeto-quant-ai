@@ -39,6 +39,27 @@ def test_generate_oos_rv_forecast_covers_test_folds_only():
     assert forecast_series.notna().all()
 
 
+def test_generate_oos_rv_forecast_uses_provided_folds():
+    from backtest.walk_forward import purged_walk_forward_splits, purged_walk_forward_splits_by_step
+    from vol.forecast import BASELINE_FEATURES, build_dataset
+
+    prices = _price_series(700, seed=7)
+    dataset = build_dataset(prices, horizon=21)
+    fixed_folds = purged_walk_forward_splits(dataset, n_splits=4, horizon=21, embargo_days=5)
+    custom_folds = purged_walk_forward_splits_by_step(
+        dataset, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+    )
+    assert len(custom_folds) > len(fixed_folds)  # reestima com muito mais frequencia
+
+    forecast_by_step = engine.generate_oos_rv_forecast(
+        dataset, BASELINE_FEATURES, horizon=21, n_splits=4, embargo_days=5, folds=custom_folds
+    )
+
+    # a previsao usando os folds customizados cobre exatamente as datas de teste desses folds.
+    expected_index = pd.concat([test["target"] for _, test in custom_folds]).index
+    assert forecast_by_step.index.equals(expected_index.sort_values())
+
+
 def test_evaluate_directional_accuracy_per_fold_structure():
     from vol.forecast import BASELINE_FEATURES, build_dataset
 

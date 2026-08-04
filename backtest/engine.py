@@ -40,16 +40,22 @@ def generate_oos_rv_forecast(
     n_splits: int,
     embargo_days: int,
     log_target: bool = True,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
 ) -> pd.Series:
     """Serie de previsao de RV FORA DA AMOSTRA (walk-forward purgado): em
     cada fold, ajusta o modelo so no treino e preve no teste, concatenando
     as previsoes de todos os folds -- o "historico de previsoes" que o
     modelo teria produzido rodando ao vivo. Datas fora de qualquer fold de
     teste (treino inicial, janelas de purga) ficam sem previsao.
+
+    `folds`: se informado, usa esses folds prontos (ex.:
+    `purged_walk_forward_splits_by_step`, reestimando com mais frequencia)
+    em vez de gerar via `purged_walk_forward_splits(n_splits=...)`.
     """
-    folds = purged_walk_forward_splits(
-        dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
-    )
+    if folds is None:
+        folds = purged_walk_forward_splits(
+            dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
+        )
     preds = []
     for train, test in folds:
         model = fit_har(train, feature_cols, log_target=log_target)
@@ -67,6 +73,7 @@ def evaluate_directional_accuracy_per_fold(
     embargo_days: int,
     log_target: bool = True,
     reference: pd.Series | None = None,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
 ) -> list[dict]:
     """Acuracia direcional (o modelo previu do lado certo de `reference`?)
     fold a fold, nos mesmos folds purgados de generate_oos_rv_forecast.
@@ -75,10 +82,13 @@ def evaluate_directional_accuracy_per_fold(
     persistencia (RV atual, `vol.forecast.persistence_forecast`) como
     referencia -- testa se o modelo acerta a DIRECAO da mudanca de RV, sem
     depender de nenhuma proxy de IV.
+
+    `folds`: ver generate_oos_rv_forecast.
     """
-    folds = purged_walk_forward_splits(
-        dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
-    )
+    if folds is None:
+        folds = purged_walk_forward_splits(
+            dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
+        )
     results = []
     for train, test in folds:
         model = fit_har(train, feature_cols, log_target=log_target)

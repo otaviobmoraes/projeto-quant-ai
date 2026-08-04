@@ -42,6 +42,24 @@ def test_run_purged_ablation_recovers_signal_when_news_is_informative():
     assert result["baseline"]["r2_oos"] < result["com_noticia"]["r2_oos"]
 
 
+def test_run_purged_ablation_uses_provided_folds_instead_of_n_splits():
+    from backtest.walk_forward import purged_walk_forward_splits_by_step
+    from vol.forecast import build_dataset
+
+    prices = _price_series(700, seed=6)
+    news = pd.Series(0.0, index=prices.index)
+
+    dataset = build_dataset(prices, news=news, horizon=21, news_smooth_window=21)
+    custom_folds = purged_walk_forward_splits_by_step(
+        dataset, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+    )
+
+    result = ablation.run_purged_ablation(prices, news, horizon=21, embargo_days=5, folds=custom_folds)
+
+    assert result["n_splits"] == len(custom_folds)
+    assert result["n_splits"] > 5  # bem mais folds que o esquema de 5 fixos
+
+
 def test_run_purged_ablation_raises_when_dataset_too_small():
     prices = _price_series(40, seed=3)
     news = pd.Series(0.0, index=prices.index)

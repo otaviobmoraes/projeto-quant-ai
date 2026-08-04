@@ -43,3 +43,35 @@ def purged_walk_forward_splits(
             continue
         splits.append((train, test))
     return splits
+
+
+def purged_walk_forward_splits_by_step(
+    dataset: pd.DataFrame, min_train_size: int, step_size: int, horizon: int, embargo_days: int = 0
+) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+    """Walk-forward purgado com PASSO FIXO (`step_size` linhas de teste por
+    fold, ex.: ~21 = 1 mes de pregao) em vez de numero de folds fixo -- gera
+    muito mais folds que `purged_walk_forward_splits` (5 grandes), reajustando
+    os coeficientes com mais frequencia. Motivacao: uma feature que so importa
+    durante um regime especifico (ex.: risco fiscal durante estresse) fica
+    diluida por um coeficiente unico congelado por ~130 dias; reajustar todo
+    mes deixa o peso da feature reagir mais rapido a mudanca de regime.
+
+    `min_train_size`: tamanho minimo do treino ANTES do primeiro fold de
+    teste (ex.: ~252 = 1 ano). Sem isso, comecar a reestimar desde o
+    principio geraria folds iniciais com treino minusculo e instavel (poucas
+    dezenas de linhas pra ajustar uma regressao com varios parametros).
+    """
+    n = len(dataset)
+    purge = horizon + embargo_days
+    splits = []
+    test_start = min_train_size
+    while test_start < n:
+        test_end = min(n, test_start + step_size)
+        train_end = max(0, test_start - purge)
+
+        train = dataset.iloc[:train_end]
+        test = dataset.iloc[test_start:test_end]
+        if len(train) > 0 and len(test) > 0:
+            splits.append((train, test))
+        test_start = test_end
+    return splits

@@ -32,6 +32,7 @@ def run_purged_ablation(
     log_target: bool = True,
     news_smooth_window: int | None = 21,
     daily_variance: pd.Series | None = None,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
 ) -> dict:
     """Ajusta o HAR-RV baseline e a versao com noticia em cada fold do
     walk-forward purgado e agrega (media) as metricas fora da amostra.
@@ -39,6 +40,12 @@ def run_purged_ablation(
     `daily_variance`: ver vol.forecast.build_dataset -- permite usar um
     estimador de RV melhor (ex.: Parkinson) em vez do proxy de retorno de
     fechamento.
+
+    `folds`: se informado, usa esses folds prontos em vez de gerar via
+    `purged_walk_forward_splits(n_splits=...)` -- permite plugar um esquema
+    de reestimacao diferente (ex.: `purged_walk_forward_splits_by_step`,
+    reestimando todo mes em vez de so 5 vezes) sem duplicar a logica de
+    ajuste/avaliacao por fold.
     """
     dataset = build_dataset(
         prices,
@@ -47,9 +54,10 @@ def run_purged_ablation(
         news_smooth_window=news_smooth_window,
         daily_variance=daily_variance,
     )
-    folds = purged_walk_forward_splits(
-        dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
-    )
+    if folds is None:
+        folds = purged_walk_forward_splits(
+            dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
+        )
     if not folds:
         raise ValueError("nenhum fold valido -- dataset pequeno demais para esses parametros")
 
