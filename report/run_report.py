@@ -11,17 +11,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from backtest import ablation, engine
+from backtest.walk_forward import purged_walk_forward_splits_by_step
 from credibility import ablation as credibility_ablation
-from data.gdelt_news import TONE_PROCESSED_PATH
+from data.gdelt_news import TONE_PROCESSED_PATH, VOLUME_PROCESSED_PATH, load_fiscal_risk_series
 from data.iv_surface import PROCESSED_PATH as IV_PROCESSED_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 from report import plots, summary
 from strategy import signal, sizing
 from vol import implied, realized
-from vol.forecast import BASELINE_FEATURES, build_dataset
+from vol.forecast import BASELINE_FEATURES, NEWS_FEATURES, build_dataset, fit_har
 
 OUT_DIR = Path(__file__).resolve().parent / "output"
 
@@ -139,6 +141,33 @@ def main() -> None:
     except FileNotFoundError as e:
         print(f"Credibilidade ainda nao coletada -- {e}")
 
+    _print_header("2c. Veredito -- risco fiscal (GDELT, atencao da imprensa)")
+    if VOLUME_PROCESSED_PATH.exists():
+        try:
+            fiscal_result = ablation.load_and_run_fiscal_risk_ablation(
+                horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
+            )
+            print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(fiscal_result['baseline'])}")
+            print(f"Com risco fiscal:              {summary.format_metrics(fiscal_result['com_noticia'])}")
+            print()
+            print(
+                build_verdict(
+                    fiscal_result, comparison_key="com_noticia", comparison_label="risco fiscal (GDELT, % de cobertura)"
+                )
+            )
+
+            fig = plots.plot_ablation_folds(
+                fiscal_result["per_fold"]["baseline"], fiscal_result["per_fold"]["com_noticia"]
+            )
+            fig.savefig(OUT_DIR / "ablation_folds_fiscal_risk.png", dpi=150)
+        except FileNotFoundError as e:
+            print(f"Risco fiscal ainda nao coletado -- {e}")
+    else:
+        print(
+            "Risco fiscal (GDELT) ainda nao coletado -- rode "
+            "data.gdelt_news.load_gdelt_volume_processed primeiro."
+        )
+
     _print_header("3. Graficos historicos")
     fx_df = pd.read_parquet(realized.FX_SPOT_PROCESSED_PATH).set_index("date").sort_index()
     close = fx_df["close"]
@@ -190,8 +219,14 @@ def main() -> None:
         )
 
         dataset = build_dataset(close, horizon=21, daily_variance=daily_variance)
+        # Reestima os coeficientes a cada ~21 dias (passo mensal) em vez de 5
+        # folds fixos (~130 dias cada) -- o sinal de alocacao reage mais
+        # rapido a mudanca de regime (ex.: salto de risco fiscal).
+        step_folds = purged_walk_forward_splits_by_step(
+            dataset, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+        )
         rv_forecast = engine.generate_oos_rv_forecast(
-            dataset, BASELINE_FEATURES, horizon=21, n_splits=5, embargo_days=5
+            dataset, BASELINE_FEATURES, horizon=21, n_splits=5, embargo_days=5, folds=step_folds
         )
 
         iv_df = implied.load_iv_atm_processed(target_days=21)
@@ -223,6 +258,77 @@ def main() -> None:
             print(f"\nbacktest_trades.csv ({len(trades)} trades) e backtest_pnl.png salvos.")
         else:
             print("Nenhum trade gerado com esses parametros.")
+
+        _print_header("5b. Risco fiscal (GDELT) na previsao de RV -- compara rendimento dos trades")
+        if VOLUME_PROCESSED_PATH.exists():
+            fiscal_news = load_fiscal_risk_series()
+            dataset_fiscal = build_dataset(
+                close, news=fiscal_news, horizon=21, news_smooth_window=21, daily_variance=daily_variance
+            )
+            # Mesmos folds (mesmo periodo de teste) para as duas versoes do
+            # modelo -- comparacao justa. O dataset com noticia comeca mais
+            # tarde (so a partir da 1a data com cobertura de risco fiscal no
+            # GDELT), entao esse "baseline" tem MENOS trades que o da secao 5.
+            fiscal_folds = purged_walk_forward_splits_by_step(
+                dataset_fiscal, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+            )
+
+            rv_forecast_baseline_aligned = engine.generate_oos_rv_forecast(
+                dataset_fiscal, BASELINE_FEATURES, horizon=21, n_splits=5, embargo_days=5, folds=fiscal_folds
+            )
+            rv_forecast_fiscal = engine.generate_oos_rv_forecast(
+                dataset_fiscal, NEWS_FEATURES, horizon=21, n_splits=5, embargo_days=5, folds=fiscal_folds
+            )
+
+            # Peso (coeficiente OLS) que o modelo atribui a noticia de risco
+            # fiscal em cada fold -- estimado a partir dos dados, nao
+            # escolhido a dedo (o time e mais forte em quant/eng que em ML;
+            # regressao simples e defensavel > blend arbitrario).
+            news_weights = [
+                fit_har(train, NEWS_FEATURES, log_target=True).params.get("news", float("nan"))
+                for train, _ in fiscal_folds
+            ]
+
+            trades_baseline_aligned = engine.run_backtest(
+                close, rv_forecast_baseline_aligned, iv_proxy_series, horizon=21, band_pct=1.0,
+                target_vega=1000.0, spread_pct=0.05,
+            )
+            trades_fiscal = engine.run_backtest(
+                close, rv_forecast_fiscal, iv_proxy_series, horizon=21, band_pct=1.0,
+                target_vega=1000.0, spread_pct=0.05,
+            )
+            stats_baseline_aligned = engine.summarize_backtest(trades_baseline_aligned, horizon=21)
+            stats_fiscal = engine.summarize_backtest(trades_fiscal, horizon=21)
+
+            print(f"Peso medio da noticia de risco fiscal (coef. OLS, log-RV) nos "
+                  f"{len(fiscal_folds)} folds: {np.nanmean(news_weights):+.4f} "
+                  f"(desvio: {np.nanstd(news_weights):.4f})")
+            print()
+            print(f"{'':22s}{'SEM risco fiscal':>20s}{'COM risco fiscal':>20s}")
+            for label, key in [
+                ("Trades", "n_trades"), ("Taxa de acerto", "win_rate"),
+                ("PnL total", "total_pnl"), ("PnL medio", "avg_pnl"), ("Sharpe", "sharpe"),
+            ]:
+                v_base = stats_baseline_aligned.get(key, float("nan"))
+                v_fiscal = stats_fiscal.get(key, float("nan"))
+                if key == "win_rate":
+                    print(f"{label:22s}{v_base:>19.1%} {v_fiscal:>19.1%}")
+                elif key in ("total_pnl", "avg_pnl"):
+                    print(f"{label:22s}{v_base:>20,.0f}{v_fiscal:>20,.0f}")
+                elif key == "sharpe":
+                    print(f"{label:22s}{v_base:>20.3f}{v_fiscal:>20.3f}")
+                else:
+                    print(f"{label:22s}{v_base:>20.0f}{v_fiscal:>20.0f}")
+
+            trades_baseline_aligned.to_csv(OUT_DIR / "backtest_trades_baseline_aligned.csv", index=False)
+            trades_fiscal.to_csv(OUT_DIR / "backtest_trades_fiscal_risk.csv", index=False)
+            print(f"\nbacktest_trades_baseline_aligned.csv ({len(trades_baseline_aligned)} trades) e "
+                  f"backtest_trades_fiscal_risk.csv ({len(trades_fiscal)} trades) salvos.")
+        else:
+            print(
+                "Risco fiscal (GDELT) ainda nao coletado -- rode "
+                "data.gdelt_news.load_gdelt_volume_processed primeiro."
+            )
     else:
         print("Superficie de IV ainda nao coletada -- rode data.iv_surface primeiro.")
 

@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 
 from backtest.walk_forward import purged_walk_forward_splits
+from data.gdelt_news import load_fiscal_risk_series
+from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 from vol.forecast import (
     BASELINE_FEATURES,
     NEWS_FEATURES,
@@ -117,4 +119,49 @@ def load_and_run_purged_ablation(
         log_target=log_target,
         news_smooth_window=news_smooth_window,
         daily_variance=daily_variance,
+    )
+
+
+def load_and_run_fiscal_risk_ablation(
+    horizon: int = 21,
+    n_splits: int = 5,
+    embargo_days: int = 5,
+    tipo: str = "venda",
+    log_target: bool = True,
+    news_smooth_window: int | None = 21,
+    use_parkinson: bool = False,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+) -> dict:
+    """Mesma avaliacao final (walk-forward purgado) de load_and_run_purged_ablation,
+    mas usando ATENCAO da imprensa a risco fiscal (GDELT, share_pct de
+    timelinevolraw -- data.gdelt_news.load_fiscal_risk_series) como camada de
+    "noticia" em vez do tom (timelinetone). Chave `com_noticia` no resultado
+    passa a significar "com risco fiscal" aqui.
+
+    `folds`: ver run_purged_ablation -- permite reestimar com mais frequencia
+    (ex.: purged_walk_forward_splits_by_step) em vez de so n_splits fixos.
+    """
+    news = load_fiscal_risk_series()
+
+    if use_parkinson:
+        from vol.realized import load_parkinson_prices_and_variance
+
+        prices, daily_variance = load_parkinson_prices_and_variance()
+    else:
+        if not PTAX_PROCESSED_PATH.exists():
+            raise FileNotFoundError(f"{PTAX_PROCESSED_PATH} nao encontrado -- rode data.ptax primeiro.")
+        ptax_df = pd.read_parquet(PTAX_PROCESSED_PATH)
+        prices = ptax_df[ptax_df["tipo"] == tipo].set_index("date")["value"].sort_index()
+        daily_variance = None
+
+    return run_purged_ablation(
+        prices,
+        news,
+        horizon=horizon,
+        n_splits=n_splits,
+        embargo_days=embargo_days,
+        log_target=log_target,
+        news_smooth_window=news_smooth_window,
+        daily_variance=daily_variance,
+        folds=folds,
     )

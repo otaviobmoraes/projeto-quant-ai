@@ -93,6 +93,32 @@ def test_load_and_run_purged_ablation_reads_processed_parquets(tmp_path, monkeyp
     assert "baseline" in result and "com_noticia" in result
 
 
+def test_load_and_run_fiscal_risk_ablation_reads_processed_parquets(tmp_path, monkeypatch):
+    prices = _price_series(400, seed=11)
+    ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
+    ptax_path = tmp_path / "ptax.parquet"
+    ptax_df.to_parquet(ptax_path)
+
+    import data.gdelt_news as gdelt_news_module
+
+    volume_df = pd.DataFrame(
+        {
+            "date": prices.index,
+            "share_pct": np.abs(np.random.default_rng(12).normal(0.1, 0.02, len(prices))),
+            "query": gdelt_news_module.FISCAL_RISK_QUERY,
+        }
+    )
+    volume_path = tmp_path / "gdelt_volume.parquet"
+    volume_df.to_parquet(volume_path)
+
+    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    monkeypatch.setattr(gdelt_news_module, "VOLUME_PROCESSED_PATH", volume_path)
+
+    result = ablation.load_and_run_fiscal_risk_ablation(horizon=21, n_splits=3, embargo_days=5)
+
+    assert "baseline" in result and "com_noticia" in result
+
+
 def test_load_and_run_purged_ablation_use_parkinson_reads_fx_spot(tmp_path, monkeypatch):
     prices = _price_series(400, seed=7)
     ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})

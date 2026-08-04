@@ -239,3 +239,20 @@ def test_load_gdelt_volume_processed_upserts_history(monkeypatch):
 
     df_again = gdelt_news.load_gdelt_volume_processed(date(2026, 6, 1), date(2026, 6, 2), query=QUERY)
     assert len(df_again) == 2  # dedup por (query, date)
+
+
+def test_load_fiscal_risk_series_raises_when_not_collected():
+    with pytest.raises(FileNotFoundError):
+        gdelt_news.load_fiscal_risk_series(query=QUERY)
+
+
+def test_load_fiscal_risk_series_returns_share_pct_indexed_by_date(monkeypatch):
+    monkeypatch.setattr(gdelt_news.requests, "get", lambda *a, **k: _FakeResponse(VOLUME_SAMPLE))
+    gdelt_news.load_gdelt_volume_processed(date(2026, 6, 1), date(2026, 6, 2), query=QUERY)
+
+    series = gdelt_news.load_fiscal_risk_series(query=QUERY)
+
+    assert series.name == "share_pct"
+    assert len(series) == 2
+    assert series.index.is_monotonic_increasing
+    assert series.tolist() == pytest.approx([3 / 100000 * 100, 6 / 120000 * 100])

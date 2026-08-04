@@ -224,6 +224,23 @@ def load_gdelt_headlines_processed(
     return _upsert_processed(day_df, HEADLINES_PROCESSED_PATH, key_cols=["query", "url"])
 
 
+def load_fiscal_risk_series(query: str = FISCAL_RISK_QUERY) -> pd.Series:
+    """Le a serie diaria de ATENCAO da imprensa a risco fiscal (share_pct,
+    ja coletada e processada por load_gdelt_volume_processed) -- sem I/O de
+    rede. Usada como camada de "noticia" alternativa ao tom (timelinetone)
+    na previsao de RV: a hipotese e que QUANTO a imprensa fala de risco
+    fiscal importa mais que o tom (positivo/negativo) dessa cobertura.
+    """
+    if not VOLUME_PROCESSED_PATH.exists():
+        raise FileNotFoundError(
+            f"{VOLUME_PROCESSED_PATH} nao encontrado -- rode "
+            "data.gdelt_news.load_gdelt_volume_processed primeiro."
+        )
+    df = pd.read_parquet(VOLUME_PROCESSED_PATH)
+    df = df[df["query"] == query]
+    return df.set_index("date")["share_pct"].sort_index()
+
+
 def _upsert_processed(new_df: pd.DataFrame, path: Path, key_cols: list[str]) -> pd.DataFrame:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     if path.exists():
