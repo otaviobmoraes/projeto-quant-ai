@@ -86,24 +86,43 @@ def _fetch_raw_chunked(
     extra_params: dict,
     chunk_days: int = 100,
     max_retries: int = 5,
+    throttle_seconds: float = 5.0,
 ) -> list[Path]:
     """Quebra [start, end] em janelas de `chunk_days` dias e busca cada uma via
     `_fetch_raw`, com retry exponencial (15s, 30s, 45s...) em caso de erro --
     o GDELT fica instavel (429/timeout) em ranges grandes numa chamada so.
     Cache idempotente por janela, igual `_fetch_raw`.
+
+    `throttle_seconds`: pausa entre janelas que precisaram de request de rede
+    de verdade (nao entre cache hits) -- o limite documentado do GDELT DOC
+    2.0 e no maximo 1 request a cada 5s (ver docstring do modulo); sem essa
+    pausa aqui, um range com muitas janelas (ex.: manchetes semanais por
+    3 anos) dispara 429 (Too Many Requests) depois de poucas chamadas
+    seguidas.
     """
     paths = []
     window_start = start
     while window_start <= end:
         window_end = min(end, window_start + pd.Timedelta(days=chunk_days))
+        was_cached = _raw_path(mode, query, window_start, window_end).exists()
         for attempt in range(max_retries):
             try:
                 paths.append(_fetch_raw(mode, window_start, window_end, query, extra_params))
                 break
+            except requests.exceptions.HTTPError as e:
+                if attempt == max_retries - 1:
+                    raise
+                # 429 (rate limit) na pratica dura bem mais que os erros
+                # transientes de timeout/conexao -- backoff bem mais longo
+                # (90s, 180s, 270s...) evita bater 429 de novo a cada retry.
+                is_429 = e.response is not None and e.response.status_code == 429
+                time_module.sleep((90 if is_429 else 15) * (attempt + 1))
             except requests.exceptions.RequestException:
                 if attempt == max_retries - 1:
                     raise
                 time_module.sleep(15 * (attempt + 1))
+        if not was_cached and throttle_seconds > 0:
+            time_module.sleep(throttle_seconds)
         window_start = window_end + pd.Timedelta(days=1)
     return paths
 
@@ -120,6 +139,67 @@ def fetch_gdelt_headlines_raw(
     return _fetch_raw(
         "artlist", start, end, query, extra_params={"maxrecords": maxrecords, "sort": "datedesc"}
     )
+
+
+def fetch_gdelt_headlines_raw_chunked(
+    start: date,
+    end: date,
+    query: str = DEFAULT_QUERY,
+    maxrecords: int = 250,
+    chunk_days: int = 7,
+    max_retries: int = 6,
+    throttle_seconds: float = 5.0,
+) -> list[Path]:
+    """Baixa manchetes (mode=artlist) em janelas de `chunk_days` dias, com
+    cache idempotente e retry -- igual fetch_gdelt_volume_raw, mas pra
+    manchetes.
+
+    O teto de `maxrecords` (250, limite do GDELT DOC 2.0) e POR JANELA, nao
+    pro range inteiro: consultas com muitos artigos/dia (a query de risco
+    fiscal tem ~124/dia em media) so devolvem os `maxrecords` mais recentes
+    de cada janela quando o volume da janela excede o teto -- janelas
+    menores amostram o periodo de forma mais representativa que uma janela
+    grande (que so devolveria os artigos mais recentes de TODO o range).
+
+    `max_retries`/`throttle_seconds`: ver _fetch_raw_chunked -- expostos aqui
+    porque, na pratica, o GDELT bate 429 com mais frequencia que o "1
+    request/5s" documentado quando o range tem muitas janelas seguidas.
+    """
+    return _fetch_raw_chunked(
+        "artlist",
+        start,
+        end,
+        query,
+        extra_params={"maxrecords": maxrecords, "sort": "datedesc"},
+        chunk_days=chunk_days,
+        max_retries=max_retries,
+        throttle_seconds=throttle_seconds,
+    )
+
+
+def load_gdelt_headlines_processed_chunked(
+    start: date,
+    end: date,
+    query: str = DEFAULT_QUERY,
+    maxrecords: int = 250,
+    chunk_days: int = 7,
+    max_retries: int = 6,
+    throttle_seconds: float = 5.0,
+) -> pd.DataFrame:
+    """Garante o raw em cache (todas as janelas), monta o DataFrame limpo e
+    faz upsert no parquet processado (mesmo HEADLINES_PROCESSED_PATH de
+    load_gdelt_headlines_processed -- dedup por (query, url) cobre overlaps)."""
+    paths = fetch_gdelt_headlines_raw_chunked(
+        start, end, query, maxrecords=maxrecords, chunk_days=chunk_days,
+        max_retries=max_retries, throttle_seconds=throttle_seconds,
+    )
+    frames = [_parse_headlines_raw(p, query) for p in paths]
+    day_df = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=["date", "title", "url", "domain", "language", "sourcecountry", "query"])
+    )
+    return _upsert_processed(day_df, HEADLINES_PROCESSED_PATH, key_cols=["query", "url"])
 
 
 def fetch_gdelt_volume_raw(
@@ -224,6 +304,24 @@ def load_gdelt_headlines_processed(
     return _upsert_processed(day_df, HEADLINES_PROCESSED_PATH, key_cols=["query", "url"])
 
 
+def fiscal_risk_surprise(series: pd.Series, window: int = 63, min_periods: int = 21) -> pd.Series:
+    """Transforma o NIVEL de atencao fiscal (share_pct) em SURPRESA: desvio em
+    unidades de desvio-padrao vs a media/desvio moveis dos ultimos `window`
+    dias uteis (~1 trimestre por padrao). `rolling()` do pandas e causal (usa
+    so passado ate o dia corrente) -- sem look-ahead.
+
+    Motivacao (ver credibility/CLAUDE.md, mesma logica aplicada la ao tom do
+    COPOM): o nivel medio de cobertura fiscal e persistente e pouco
+    informativo por si so; um PICO acima do normal recente e o tipo de evento
+    que deveria se relacionar a RV futura, nao o nivel. `window=63,
+    min_periods=21` evita comecar a serie com poucochissimas observacoes (e
+    portanto desvio-padrao instavel) nos primeiros dias.
+    """
+    rolling_mean = series.rolling(window, min_periods=min_periods).mean()
+    rolling_std = series.rolling(window, min_periods=min_periods).std().replace(0, pd.NA)
+    return ((series - rolling_mean) / rolling_std).rename("fiscal_risk_surprise")
+
+
 def load_fiscal_risk_series(query: str = FISCAL_RISK_QUERY) -> pd.Series:
     """Le a serie diaria de ATENCAO da imprensa a risco fiscal (share_pct,
     ja coletada e processada por load_gdelt_volume_processed) -- sem I/O de
@@ -239,6 +337,86 @@ def load_fiscal_risk_series(query: str = FISCAL_RISK_QUERY) -> pd.Series:
     df = pd.read_parquet(VOLUME_PROCESSED_PATH)
     df = df[df["query"] == query]
     return df.set_index("date")["share_pct"].sort_index()
+
+
+def select_surprise_spike_windows(
+    surprise: pd.Series, top_n: int = 15, window_days: int = 3, min_gap_days: int = 10
+) -> list[tuple[date, date]]:
+    """Seleciona as `top_n` datas de MAIOR surpresa de atencao fiscal
+    (fiscal_risk_surprise), nao clusterizadas entre si (min_gap_days de
+    distancia minima -- evita pegar o mesmo evento de estresse varias vezes
+    so porque durou alguns dias seguidos), e devolve uma janela de
+    +-`window_days` ao redor de cada uma.
+
+    Motivacao: o coletor exaustivo de manchetes (mode=artlist) do GDELT
+    rate-limita bem mais forte que o documentado para ranges longos com
+    muitas janelas seguidas (ver fetch_gdelt_headlines_raw_chunked). Buscar
+    manchetes so nos PICOS de atencao, em vez do periodo inteiro, reduz
+    drasticamente o numero de requests -- e e coerente com a propria tese de
+    fiscal_risk_surprise: e o pico, nao o nivel medio, que deveria importar.
+    """
+    ranked = surprise.dropna().sort_values(ascending=False)
+    selected: list[pd.Timestamp] = []
+    for dt in ranked.index:
+        if all(abs((dt - s).days) >= min_gap_days for s in selected):
+            selected.append(dt)
+        if len(selected) >= top_n:
+            break
+    selected.sort()
+    return [
+        ((d - pd.Timedelta(days=window_days)).date(), (d + pd.Timedelta(days=window_days)).date())
+        for d in selected
+    ]
+
+
+def fetch_gdelt_headlines_raw_for_windows(
+    windows: list[tuple[date, date]],
+    query: str = DEFAULT_QUERY,
+    maxrecords: int = 250,
+    max_retries: int = 6,
+    throttle_seconds: float = 5.0,
+) -> list[Path]:
+    """Baixa manchetes (mode=artlist) so nas janelas informadas (ver
+    select_surprise_spike_windows), com o mesmo cache/retry/throttle de
+    fetch_gdelt_headlines_raw_chunked -- versao "cirurgica" pra quando o
+    range completo tem janelas demais pro GDELT aceitar sem bloquear."""
+    paths = []
+    for i, (start, end) in enumerate(windows):
+        paths.extend(
+            _fetch_raw_chunked(
+                "artlist",
+                start,
+                end,
+                query,
+                extra_params={"maxrecords": maxrecords, "sort": "datedesc"},
+                chunk_days=(end - start).days + 1,
+                max_retries=max_retries,
+                throttle_seconds=throttle_seconds,
+            )
+        )
+    return paths
+
+
+def load_gdelt_headlines_processed_for_windows(
+    windows: list[tuple[date, date]],
+    query: str = DEFAULT_QUERY,
+    maxrecords: int = 250,
+    max_retries: int = 6,
+    throttle_seconds: float = 5.0,
+) -> pd.DataFrame:
+    """Garante o raw em cache (todas as janelas), monta o DataFrame limpo e
+    faz upsert no parquet processado -- versao "cirurgica" de
+    load_gdelt_headlines_processed_chunked (ver fetch_gdelt_headlines_raw_for_windows)."""
+    paths = fetch_gdelt_headlines_raw_for_windows(
+        windows, query, maxrecords=maxrecords, max_retries=max_retries, throttle_seconds=throttle_seconds
+    )
+    frames = [_parse_headlines_raw(p, query) for p in paths]
+    day_df = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=["date", "title", "url", "domain", "language", "sourcecountry", "query"])
+    )
+    return _upsert_processed(day_df, HEADLINES_PROCESSED_PATH, key_cols=["query", "url"])
 
 
 def _upsert_processed(new_df: pd.DataFrame, path: Path, key_cols: list[str]) -> pd.DataFrame:

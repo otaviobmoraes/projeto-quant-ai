@@ -20,6 +20,9 @@ def fake_pipeline(texts: list[str]) -> list[dict]:
 def _isolated_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(daily_index, "PROCESSED_DIR", tmp_path / "processed")
     monkeypatch.setattr(daily_index, "PROCESSED_PATH", tmp_path / "processed" / "sentiment_index.parquet")
+    monkeypatch.setattr(
+        daily_index, "FISCAL_SENTIMENT_PROCESSED_PATH", tmp_path / "processed" / "fiscal_sentiment_index.parquet"
+    )
     yield
 
 
@@ -89,3 +92,58 @@ def test_load_combined_daily_sentiment_combines_copom_and_rss(tmp_path, monkeypa
     assert len(result) == 1
     assert result["n_textos"].iloc[0] == 2
     assert result["sentiment_mean"].iloc[0] == pytest.approx((0.9 - 0.8) / 2)
+
+
+def test_load_fiscal_risk_sentiment_index_raises_when_not_collected(tmp_path, monkeypatch):
+    monkeypatch.setattr(daily_index, "HEADLINES_PROCESSED_PATH", tmp_path / "missing_headlines.parquet")
+
+    with pytest.raises(FileNotFoundError):
+        daily_index.load_fiscal_risk_sentiment_index()
+
+
+def test_load_fiscal_risk_sentiment_index_filters_query_and_language(tmp_path, monkeypatch):
+    headlines_path = tmp_path / "gdelt_headlines.parquet"
+    headlines_df = pd.DataFrame(
+        {
+            "date": [
+                pd.Timestamp("2026-07-01", tz="America/Sao_Paulo"),
+                pd.Timestamp("2026-07-01", tz="America/Sao_Paulo"),
+                pd.Timestamp("2026-07-02", tz="America/Sao_Paulo"),
+                pd.Timestamp("2026-07-02", tz="America/Sao_Paulo"),
+            ],
+            "title": ["bom", "ruim", "neutro", "bom"],
+            "language": ["Portuguese", "Portuguese", "English", "Portuguese"],
+            "query": ["fiscal", "fiscal", "fiscal", "outra query"],
+        }
+    )
+    headlines_df.to_parquet(headlines_path)
+
+    monkeypatch.setattr(daily_index, "HEADLINES_PROCESSED_PATH", headlines_path)
+    monkeypatch.setattr(daily_index, "FISCAL_RISK_QUERY", "fiscal")
+
+    result = daily_index.load_fiscal_risk_sentiment_index(pipeline_fn=fake_pipeline)
+
+    assert daily_index.FISCAL_SENTIMENT_PROCESSED_PATH.exists()
+    # so as 2 manchetes de query="fiscal" E language="Portuguese" (dia 2026-07-01)
+    assert len(result) == 1
+    assert result["n_textos"].iloc[0] == 2
+    assert result["sentiment_mean"].iloc[0] == pytest.approx((0.9 - 0.8) / 2)
+
+
+def test_load_fiscal_risk_sentiment_index_raises_when_language_empty(tmp_path, monkeypatch):
+    headlines_path = tmp_path / "gdelt_headlines.parquet"
+    headlines_df = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2026-07-01", tz="America/Sao_Paulo")],
+            "title": ["neutro"],
+            "language": ["English"],
+            "query": ["fiscal"],
+        }
+    )
+    headlines_df.to_parquet(headlines_path)
+
+    monkeypatch.setattr(daily_index, "HEADLINES_PROCESSED_PATH", headlines_path)
+    monkeypatch.setattr(daily_index, "FISCAL_RISK_QUERY", "fiscal")
+
+    with pytest.raises(ValueError):
+        daily_index.load_fiscal_risk_sentiment_index(pipeline_fn=fake_pipeline)

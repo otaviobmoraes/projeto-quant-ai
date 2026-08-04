@@ -17,10 +17,16 @@ import pandas as pd
 from backtest import ablation, engine
 from backtest.walk_forward import purged_walk_forward_splits_by_step
 from credibility import ablation as credibility_ablation
-from data.gdelt_news import TONE_PROCESSED_PATH, VOLUME_PROCESSED_PATH, load_fiscal_risk_series
+from data.gdelt_news import (
+    TONE_PROCESSED_PATH,
+    VOLUME_PROCESSED_PATH,
+    fiscal_risk_surprise,
+    load_fiscal_risk_series,
+)
 from data.iv_surface import PROCESSED_PATH as IV_PROCESSED_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 from report import plots, summary
+from sentiment.daily_index import FISCAL_SENTIMENT_PROCESSED_PATH
 from strategy import signal, sizing
 from vol import implied, realized
 from vol.forecast import BASELINE_FEATURES, NEWS_FEATURES, build_dataset, fit_har
@@ -166,6 +172,36 @@ def main() -> None:
         print(
             "Risco fiscal (GDELT) ainda nao coletado -- rode "
             "data.gdelt_news.load_gdelt_volume_processed primeiro."
+        )
+
+    _print_header("2d. Veredito -- risco fiscal REFINADO (surpresa + sentimento FinBERT-PT-BR)")
+    if FISCAL_SENTIMENT_PROCESSED_PATH.exists():
+        try:
+            fiscal_v2_result = ablation.load_and_run_fiscal_risk_ablation_v2(
+                horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
+            )
+            print(f"Baseline (HAR-RV, Parkinson):     {summary.format_metrics(fiscal_v2_result['baseline'])}")
+            print(f"Com risco fiscal refinado:        {summary.format_metrics(fiscal_v2_result['com_risco_fiscal_v2'])}")
+            print()
+            print(
+                build_verdict(
+                    fiscal_v2_result,
+                    comparison_key="com_risco_fiscal_v2",
+                    comparison_label="risco fiscal refinado (surpresa + sentimento FinBERT nas manchetes em portugues)",
+                )
+            )
+
+            fig = plots.plot_ablation_folds(
+                fiscal_v2_result["per_fold"]["baseline"], fiscal_v2_result["per_fold"]["com_risco_fiscal_v2"]
+            )
+            fig.savefig(OUT_DIR / "ablation_folds_fiscal_risk_v2.png", dpi=150)
+        except FileNotFoundError as e:
+            print(f"Risco fiscal refinado ainda nao coletado -- {e}")
+    else:
+        print(
+            "Sentimento fiscal (FinBERT) ainda nao coletado -- rode "
+            "sentiment.daily_index.load_fiscal_risk_sentiment_index() primeiro "
+            "(precisa de data.gdelt_news.load_gdelt_headlines_processed_chunked antes)."
         )
 
     _print_header("3. Graficos historicos")
@@ -328,6 +364,75 @@ def main() -> None:
             print(
                 "Risco fiscal (GDELT) ainda nao coletado -- rode "
                 "data.gdelt_news.load_gdelt_volume_processed primeiro."
+            )
+
+        _print_header("5c. Risco fiscal REFINADO (surpresa + sentimento) -- compara rendimento dos trades")
+        if FISCAL_SENTIMENT_PROCESSED_PATH.exists():
+            fiscal_surprise_series = fiscal_risk_surprise(load_fiscal_risk_series(), window=63)
+            fiscal_sentiment_df = pd.read_parquet(FISCAL_SENTIMENT_PROCESSED_PATH)
+            fiscal_sentiment_series = fiscal_sentiment_df.set_index("date")["sentiment_mean"].sort_index()
+
+            dataset_fiscal_v2 = ablation.build_dataset_with_fiscal_risk(
+                close, fiscal_surprise_series, fiscal_sentiment_series,
+                horizon=21, daily_variance=daily_variance, sentiment_smooth_window=5,
+            )
+            fiscal_v2_folds = purged_walk_forward_splits_by_step(
+                dataset_fiscal_v2, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+            )
+
+            rv_forecast_baseline_v2 = engine.generate_oos_rv_forecast(
+                dataset_fiscal_v2, BASELINE_FEATURES, horizon=21, n_splits=5, embargo_days=5, folds=fiscal_v2_folds
+            )
+            rv_forecast_fiscal_v2 = engine.generate_oos_rv_forecast(
+                dataset_fiscal_v2, ablation.FISCAL_RISK_FEATURES, horizon=21, n_splits=5, embargo_days=5,
+                folds=fiscal_v2_folds,
+            )
+
+            v2_weights = {"fiscal_surprise": [], "fiscal_sentiment": []}
+            for train, _ in fiscal_v2_folds:
+                model = fit_har(train, ablation.FISCAL_RISK_FEATURES, log_target=True)
+                v2_weights["fiscal_surprise"].append(model.params.get("fiscal_surprise", float("nan")))
+                v2_weights["fiscal_sentiment"].append(model.params.get("fiscal_sentiment", float("nan")))
+
+            trades_baseline_v2 = engine.run_backtest(
+                close, rv_forecast_baseline_v2, iv_proxy_series, horizon=21, band_pct=1.0,
+                target_vega=1000.0, spread_pct=0.05,
+            )
+            trades_fiscal_v2 = engine.run_backtest(
+                close, rv_forecast_fiscal_v2, iv_proxy_series, horizon=21, band_pct=1.0,
+                target_vega=1000.0, spread_pct=0.05,
+            )
+            stats_baseline_v2 = engine.summarize_backtest(trades_baseline_v2, horizon=21)
+            stats_fiscal_v2 = engine.summarize_backtest(trades_fiscal_v2, horizon=21)
+
+            for feat_name, weights in v2_weights.items():
+                print(f"Peso medio de '{feat_name}' (coef. OLS, log-RV) nos {len(fiscal_v2_folds)} folds: "
+                      f"{np.nanmean(weights):+.4f} (desvio: {np.nanstd(weights):.4f})")
+            print()
+            print(f"{'':22s}{'SEM risco fiscal':>20s}{'COM risco fiscal v2':>22s}")
+            for label, key in [
+                ("Trades", "n_trades"), ("Taxa de acerto", "win_rate"),
+                ("PnL total", "total_pnl"), ("PnL medio", "avg_pnl"), ("Sharpe", "sharpe"),
+            ]:
+                v_base = stats_baseline_v2.get(key, float("nan"))
+                v_fiscal = stats_fiscal_v2.get(key, float("nan"))
+                if key == "win_rate":
+                    print(f"{label:22s}{v_base:>19.1%} {v_fiscal:>21.1%}")
+                elif key in ("total_pnl", "avg_pnl"):
+                    print(f"{label:22s}{v_base:>20,.0f}{v_fiscal:>22,.0f}")
+                elif key == "sharpe":
+                    print(f"{label:22s}{v_base:>20.3f}{v_fiscal:>22.3f}")
+                else:
+                    print(f"{label:22s}{v_base:>20.0f}{v_fiscal:>22.0f}")
+
+            trades_baseline_v2.to_csv(OUT_DIR / "backtest_trades_baseline_v2_aligned.csv", index=False)
+            trades_fiscal_v2.to_csv(OUT_DIR / "backtest_trades_fiscal_risk_v2.csv", index=False)
+            print(f"\nbacktest_trades_baseline_v2_aligned.csv ({len(trades_baseline_v2)} trades) e "
+                  f"backtest_trades_fiscal_risk_v2.csv ({len(trades_fiscal_v2)} trades) salvos.")
+        else:
+            print(
+                "Sentimento fiscal (FinBERT) ainda nao coletado -- rode "
+                "sentiment.daily_index.load_fiscal_risk_sentiment_index() primeiro."
             )
     else:
         print("Superficie de IV ainda nao coletada -- rode data.iv_surface primeiro.")

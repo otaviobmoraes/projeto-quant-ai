@@ -119,6 +119,34 @@ def test_load_and_run_fiscal_risk_ablation_reads_processed_parquets(tmp_path, mo
     assert "baseline" in result and "com_noticia" in result
 
 
+def test_load_and_run_fiscal_risk_ablation_use_surprise_transforms_news(tmp_path, monkeypatch):
+    prices = _price_series(400, seed=13)
+    ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
+    ptax_path = tmp_path / "ptax.parquet"
+    ptax_df.to_parquet(ptax_path)
+
+    import data.gdelt_news as gdelt_news_module
+
+    volume_df = pd.DataFrame(
+        {
+            "date": prices.index,
+            "share_pct": np.abs(np.random.default_rng(14).normal(0.1, 0.02, len(prices))),
+            "query": gdelt_news_module.FISCAL_RISK_QUERY,
+        }
+    )
+    volume_path = tmp_path / "gdelt_volume.parquet"
+    volume_df.to_parquet(volume_path)
+
+    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    monkeypatch.setattr(gdelt_news_module, "VOLUME_PROCESSED_PATH", volume_path)
+
+    result = ablation.load_and_run_fiscal_risk_ablation(
+        horizon=21, n_splits=3, embargo_days=5, use_surprise=True, surprise_window=63
+    )
+
+    assert "baseline" in result and "com_noticia" in result
+
+
 def test_load_and_run_purged_ablation_use_parkinson_reads_fx_spot(tmp_path, monkeypatch):
     prices = _price_series(400, seed=7)
     ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
@@ -157,3 +185,92 @@ def test_load_and_run_purged_ablation_use_parkinson_reads_fx_spot(tmp_path, monk
     )
 
     assert "baseline" in result and "com_noticia" in result
+
+
+def test_build_dataset_with_fiscal_risk_aligns_both_layers_no_lookahead():
+    prices = _price_series(300, seed=20)
+
+    surprise = pd.Series(1.0, index=prices.index)
+    sentiment = pd.Series(0.5, index=prices.index)
+
+    dataset = ablation.build_dataset_with_fiscal_risk(prices, surprise, sentiment, horizon=21)
+
+    assert list(dataset.columns) == ["rv_d", "rv_w", "rv_m", "target", "fiscal_surprise", "fiscal_sentiment"]
+    assert (dataset["fiscal_surprise"] == 1.0).all()
+    assert (dataset["fiscal_sentiment"] == 0.5).all()
+
+
+def test_build_dataset_with_fiscal_risk_aligns_date_only_sentiment_index():
+    # sentiment.daily_index.daily_sentiment_index guarda "date" como
+    # datetime.date PURO (sem tz) -- prices/fiscal_surprise sao tz-aware
+    # (America/Sao_Paulo). Sem normalizar, o reindex casaria zero labels.
+    prices = _price_series(300, seed=26)
+    surprise = pd.Series(1.0, index=prices.index)
+    sentiment = pd.Series(0.5, index=prices.index.date)  # indice date-only, sem tz
+
+    dataset = ablation.build_dataset_with_fiscal_risk(
+        prices, surprise, sentiment, horizon=21, sentiment_smooth_window=None
+    )
+
+    assert len(dataset) > 0
+    assert (dataset["fiscal_sentiment"] == 0.5).all()
+
+
+def test_run_fiscal_risk_ablation_v2_recovers_signal_when_informative():
+    prices = _price_series(400, seed=21)
+    from vol.forecast import build_dataset
+
+    dataset_baseline = build_dataset(prices, horizon=21)
+    rng = np.random.default_rng(22)
+    informative = dataset_baseline["target"] + rng.normal(0, 0.01, len(dataset_baseline))
+    surprise = informative.reindex(prices.index)
+    sentiment = pd.Series(0.0, index=prices.index)
+
+    result = ablation.run_fiscal_risk_ablation_v2(
+        prices, surprise, sentiment, horizon=21, n_splits=4, embargo_days=5
+    )
+
+    assert result["baseline"]["r2_oos"] < result["com_risco_fiscal_v2"]["r2_oos"]
+
+
+def test_load_and_run_fiscal_risk_ablation_v2_raises_when_sentiment_not_collected(tmp_path, monkeypatch):
+    import sentiment.daily_index as daily_index_module
+
+    monkeypatch.setattr(daily_index_module, "FISCAL_SENTIMENT_PROCESSED_PATH", tmp_path / "missing.parquet")
+
+    with pytest.raises(FileNotFoundError):
+        ablation.load_and_run_fiscal_risk_ablation_v2()
+
+
+def test_load_and_run_fiscal_risk_ablation_v2_reads_processed_parquets(tmp_path, monkeypatch):
+    prices = _price_series(400, seed=23)
+    ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
+    ptax_path = tmp_path / "ptax.parquet"
+    ptax_df.to_parquet(ptax_path)
+
+    import data.gdelt_news as gdelt_news_module
+    import sentiment.daily_index as daily_index_module
+
+    volume_df = pd.DataFrame(
+        {
+            "date": prices.index,
+            "share_pct": np.abs(np.random.default_rng(24).normal(0.1, 0.02, len(prices))),
+            "query": gdelt_news_module.FISCAL_RISK_QUERY,
+        }
+    )
+    volume_path = tmp_path / "gdelt_volume.parquet"
+    volume_df.to_parquet(volume_path)
+
+    sentiment_df = pd.DataFrame(
+        {"date": prices.index.date, "sentiment_mean": np.random.default_rng(25).normal(0, 0.1, len(prices))}
+    )
+    sentiment_path = tmp_path / "fiscal_sentiment_index.parquet"
+    sentiment_df.to_parquet(sentiment_path)
+
+    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    monkeypatch.setattr(gdelt_news_module, "VOLUME_PROCESSED_PATH", volume_path)
+    monkeypatch.setattr(daily_index_module, "FISCAL_SENTIMENT_PROCESSED_PATH", sentiment_path)
+
+    result = ablation.load_and_run_fiscal_risk_ablation_v2(horizon=21, n_splits=3, embargo_days=5)
+
+    assert "baseline" in result and "com_risco_fiscal_v2" in result

@@ -11,12 +11,14 @@ from typing import Callable
 import pandas as pd
 
 from data.copom import PROCESSED_PATH as COPOM_PROCESSED_PATH
+from data.gdelt_news import FISCAL_RISK_QUERY, HEADLINES_PROCESSED_PATH
 from data.rss_news import PROCESSED_PATH as RSS_PROCESSED_PATH
 from sentiment.finbert import score_texts
 
 BASE_DIR = Path(__file__).resolve().parent
 PROCESSED_DIR = BASE_DIR / "processed"
 PROCESSED_PATH = PROCESSED_DIR / "sentiment_index.parquet"
+FISCAL_SENTIMENT_PROCESSED_PATH = PROCESSED_DIR / "fiscal_sentiment_index.parquet"
 
 
 def daily_sentiment_index(
@@ -76,4 +78,42 @@ def load_combined_daily_sentiment(
 
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     daily.to_parquet(PROCESSED_PATH, index=False)
+    return daily
+
+
+def load_fiscal_risk_sentiment_index(
+    query: str | None = None,
+    language: str = "Portuguese",
+    pipeline_fn: Callable[[list[str]], list[dict]] | None = None,
+) -> pd.DataFrame:
+    """Le as manchetes de risco fiscal ja coletadas (data.gdelt_news,
+    load_gdelt_headlines_processed_chunked), pontua com o FinBERT-PT-BR e
+    monta o indice diario de sentimento/estresse fiscal.
+
+    `language="Portuguese"`: FILTRO OBRIGATORIO -- FinBERT-PT-BR so serve
+    para texto em portugues. A query de risco fiscal usa palavras-chave em
+    ingles ("fiscal", "budget", ...) e o GDELT monitora cobertura GLOBAL: uma
+    amostra real (checada manualmente) trouxe so ~32% das manchetes em
+    portugues, o resto espalhado entre ingles, espanhol e mais de 8 outros
+    idiomas. Aplicar o modelo ao lote inteiro sem filtrar daria pontuacao de
+    sentimento sem sentido pra maior parte dos textos.
+    """
+    if not HEADLINES_PROCESSED_PATH.exists():
+        raise FileNotFoundError(
+            f"{HEADLINES_PROCESSED_PATH} nao encontrado -- rode "
+            "data.gdelt_news.load_gdelt_headlines_processed_chunked primeiro."
+        )
+    query = query or FISCAL_RISK_QUERY
+    headlines = pd.read_parquet(HEADLINES_PROCESSED_PATH)
+    headlines = headlines[(headlines["query"] == query) & (headlines["language"] == language)]
+    if headlines.empty:
+        raise ValueError(
+            f"nenhuma manchete em '{language}' encontrada para a query de risco fiscal -- "
+            "verifique se a coleta ja rodou e se ha cobertura nesse idioma."
+        )
+
+    daily = daily_sentiment_index(headlines, date_col="date", text_col="title", pipeline_fn=pipeline_fn)
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    daily.to_parquet(FISCAL_SENTIMENT_PROCESSED_PATH, index=False)
     return daily
