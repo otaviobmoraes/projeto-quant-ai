@@ -86,6 +86,18 @@ CONFIGS_TESTED = [
     "curto prazo. R2 (pooled, medido contra o valor real) continua a "
     "metrica confiavel; Sharpe do backtest ilustrativo nao deveria ser "
     "usado pra escolher entre modelos ate haver IV real historica.",
+    "Persistencia + CORRECAO DE RESIDUO (regressao no residuo target-"
+    "persistencia, ver backtest.engine.generate_residual_corrected_forecast) "
+    "-- testadas as 6 camadas ja avaliadas contra o HAR-RV (so rv_d/rv_w/rv_m, "
+    "noticia, credibilidade, risco fiscal v2, overnight, leverage, VIX+DXY) "
+    "como corretoras da persistencia em vez de substitutas dela. TODAS "
+    "pioraram o R2 pooled vs persistencia pura, sem excecao (delta entre "
+    "-0.133 e -1.851) -- persistencia nao tem parametro nenhum (zero risco "
+    "de overfitting); qualquer correcao via regressao introduz variancia de "
+    "estimacao sem sinal real pra compensar, piorando a previsao. 19a "
+    "tentativa consecutiva sem melhorar o modelo nesse dataset -- "
+    "simplicidade (persistencia pura, sem nenhuma camada) e o resultado "
+    "mais robusto encontrado.",
 ]
 
 

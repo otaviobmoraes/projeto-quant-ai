@@ -103,6 +103,48 @@ def generate_ensemble_forecast(
     return combined.mean(axis=1).rename("rv_forecast")
 
 
+def generate_residual_corrected_forecast(
+    dataset: pd.DataFrame,
+    feature_cols: list[str],
+    horizon: int,
+    n_splits: int,
+    embargo_days: int,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+) -> pd.Series:
+    """Previsao = persistencia (base, SEM parametro nenhum) + correcao
+    ajustada por OLS no RESIDUO (target - persistencia), usando `feature_cols`.
+
+    Motivacao: em TODA comparacao ja feita neste projeto, persistencia bateu
+    o HAR-RV como previsao standalone (ver CONFIGS_TESTED em
+    report/run_report.py) -- entao "HAR-RV + noticia/credibilidade/etc
+    bate o HAR-RV" nao responde mais a pergunta que importa. Aqui a
+    pergunta correta: uma camada de informacao explica o que a
+    PERSISTENCIA (o melhor baseline que temos) ainda erra?
+
+    O residuo pode ser positivo ou negativo (RV real acima ou abaixo da
+    persistencia), entao o ajuste e em NIVEL (log_target=False) -- nao faz
+    sentido logaritmizar algo que pode ser negativo. A previsao final
+    (persistencia + correcao) e truncada em 0 (RV nao pode ser negativa).
+    """
+    if folds is None:
+        folds = purged_walk_forward_splits(
+            dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
+        )
+    base = persistence_forecast(dataset)
+    residual = dataset["target"] - base
+
+    preds = []
+    for train, test in folds:
+        train_residual = train.copy()
+        train_residual["target"] = residual.reindex(train.index)
+        model = fit_har(train_residual, feature_cols, log_target=False)
+        pred_residual = predict(model, test, feature_cols, log_target=False)
+        preds.append(base.reindex(test.index) + pred_residual)
+    if not preds:
+        return pd.Series(dtype=float)
+    return pd.concat(preds).sort_index().rename("rv_forecast").clip(lower=0.0)
+
+
 def evaluate_directional_accuracy_per_fold(
     dataset: pd.DataFrame,
     feature_cols: list[str],

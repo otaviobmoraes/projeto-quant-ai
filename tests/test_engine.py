@@ -101,6 +101,68 @@ def test_generate_ensemble_forecast_averages_different_feature_sets():
     pd.testing.assert_series_equal(forecasts.sort_index(), expected.rename("rv_forecast").sort_index())
 
 
+def test_generate_residual_corrected_forecast_recovers_signal_in_residual():
+    from vol.forecast import BASELINE_FEATURES, build_dataset, persistence_forecast
+
+    prices = _price_series(400, seed=20)
+    dataset = build_dataset(prices, horizon=21)
+    base = persistence_forecast(dataset)
+
+    # feature perfeitamente informativa sobre o RESIDUO da persistencia
+    # (+ ruido minusculo) -- a correcao deve recuperar o alvo quase exato.
+    rng = np.random.default_rng(21)
+    residual = dataset["target"] - base
+    dataset = dataset.copy()
+    dataset["perfect_feature"] = residual + rng.normal(0, 1e-6, len(dataset))
+
+    forecast = engine.generate_residual_corrected_forecast(
+        dataset, BASELINE_FEATURES + ["perfect_feature"], horizon=21, n_splits=4, embargo_days=5
+    )
+
+    aligned_target = dataset.loc[forecast.index, "target"]
+    err = (forecast - aligned_target).abs()
+    assert err.max() < 0.5  # bem mais preciso que qualquer forecast puro ja visto no projeto
+
+
+def test_generate_residual_corrected_forecast_close_to_persistence_when_feature_is_noise():
+    from vol.forecast import BASELINE_FEATURES, build_dataset, persistence_forecast
+
+    prices = _price_series(400, seed=22)
+    dataset = build_dataset(prices, horizon=21)
+    rng = np.random.default_rng(23)
+    dataset = dataset.copy()
+    dataset["noise_feature"] = rng.normal(0, 1, len(dataset))
+
+    corrected = engine.generate_residual_corrected_forecast(
+        dataset, BASELINE_FEATURES + ["noise_feature"], horizon=21, n_splits=4, embargo_days=5
+    )
+    base = persistence_forecast(dataset).reindex(corrected.index)
+
+    # feature pura de ruido nao deveria mudar a previsao de forma
+    # perceptivel na maioria dos dias -- media do desvio absoluto pequena
+    # relativa a escala tipica de RV (pontos percentuais de dezenas).
+    assert (corrected - base).abs().mean() < 2.0
+
+
+def test_generate_residual_corrected_forecast_clips_at_zero():
+    from vol.forecast import BASELINE_FEATURES, build_dataset, persistence_forecast
+
+    prices = _price_series(300, seed=24)
+    dataset = build_dataset(prices, horizon=21)
+    dataset = dataset.copy()
+    # Forca o residuo (target - persistencia) a ser um numero enorme e
+    # NEGATIVO em todo o treino -- qualquer regressao razoavel vai fitar um
+    # intercepto proximo disso, empurrando persistencia + correcao pra bem
+    # abaixo de zero.
+    dataset["target"] = persistence_forecast(dataset) - 1_000_000
+
+    forecast = engine.generate_residual_corrected_forecast(
+        dataset, BASELINE_FEATURES, horizon=21, n_splits=4, embargo_days=5
+    )
+
+    assert (forecast >= 0).all()
+
+
 def test_evaluate_directional_accuracy_per_fold_structure():
     from vol.forecast import BASELINE_FEATURES, build_dataset
 
