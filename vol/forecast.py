@@ -46,6 +46,39 @@ def har_features(prices: pd.Series) -> pd.DataFrame:
     return har_features_from_variance(log_returns(prices) ** 2)
 
 
+def overnight_variance(open_prices: pd.Series, prev_close: pd.Series) -> pd.Series:
+    """Variancia "instantanea" do gap overnight (fechamento de ontem ->
+    abertura de hoje): ln(open_t / close_{t-1})^2.
+
+    O estimador de Parkinson (vol/realized.py) so captura o range INTRADIA
+    (High/Low) -- o gap overnight (ex.: noticia que sai depois do fechamento
+    de NY e antes da abertura de Tóquio/Londres) fica de fora. Essa feature
+    complementa isso. Literatura (Kambouroudis, Kizys & Christodoulou-Volos,
+    2021, Journal of Futures Markets): retorno overnight tem poder preditivo
+    MAIS FORTE que o componente de jump pra previsao de RV futura.
+
+    `prev_close`: passe `close.shift(1)` -- precisa ser o fechamento do dia
+    util ANTERIOR, alinhado ao mesmo indice de `open_prices`.
+    """
+    return (np.log(open_prices / prev_close) ** 2).rename("overnight")
+
+
+def semivariance_features(daily_variance: pd.Series, returns: pd.Series) -> pd.DataFrame:
+    """Decompoe a variancia diaria em duas series -- rv_d_pos (dias de
+    retorno POSITIVO, zero nos outros dias) e rv_d_neg (dias de retorno
+    NEGATIVO, zero nos outros) -- pra capturar efeito de leverage/assimetria
+    (Barndorff-Nielsen, Kinnebrock & Shephard, 2010, "realized semivariance").
+
+    Diferente da interacao multiplicativa (rv_d x indicador_de_queda) ja
+    testada e descartada por multicolinearidade com rv_d/rv_w/rv_m: aqui e
+    uma DECOMPOSICAO ADITIVA (rv_d_pos + rv_d_neg = rv_d em qualquer dia),
+    nao uma interacao -- historicamente sofre bem menos colinearidade.
+    """
+    pos = daily_variance.where(returns > 0, 0.0)
+    neg = daily_variance.where(returns < 0, 0.0)
+    return pd.DataFrame({"rv_d_pos": pos, "rv_d_neg": neg})
+
+
 def forward_target_from_variance(daily_variance: pd.Series, horizon: int) -> pd.Series:
     """RV anualizada realizada nos `horizon` dias APOS cada data, a partir de
     uma serie generica de variancia realizada diaria -- ver `forward_target`.
@@ -91,6 +124,42 @@ def build_dataset(
         if news_smooth_window is not None:
             news = news.rolling(news_smooth_window, min_periods=1).mean()
         df["news"] = news.reindex(df.index, method="ffill")
+    return df.dropna()
+
+
+OVERNIGHT_FEATURES = BASELINE_FEATURES + ["overnight"]
+LEVERAGE_FEATURES = ["rv_d_pos", "rv_d_neg", "rv_w", "rv_m"]
+
+
+def build_dataset_extended(
+    close: pd.Series,
+    open_: pd.Series,
+    horizon: int = 21,
+    daily_variance: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Dataset HAR ESTENDIDO: features baseline (rv_d/rv_w/rv_m) + overnight
+    (gap fechamento->abertura, ver overnight_variance) + semivariancia
+    (rv_d_pos/rv_d_neg, ver semivariance_features) -- extensoes com suporte
+    na literatura pra RV de cambio (Kambouroudis et al., 2021;
+    Barndorff-Nielsen, Kinnebrock & Shephard, 2010), testadas depois que a
+    tentativa anterior de leverage via interacao multiplicativa nao ajudou
+    (multicolinearidade).
+
+    `close`/`open_`: precisam ter o MESMO indice (ex.: data.fx_spot, que tem
+    OHLC). `daily_variance`: ver build_dataset -- usa Parkinson se fornecido.
+    """
+    variance = daily_variance if daily_variance is not None else log_returns(close) ** 2
+    df = har_features_from_variance(variance)
+    df["target"] = forward_target_from_variance(variance, horizon)
+
+    returns = log_returns(close)
+    semivar = semivariance_features(variance, returns)
+    df["rv_d_pos"] = semivar["rv_d_pos"]
+    df["rv_d_neg"] = semivar["rv_d_neg"]
+
+    prev_close = close.shift(1)
+    df["overnight"] = overnight_variance(open_, prev_close).reindex(df.index)
+
     return df.dropna()
 
 

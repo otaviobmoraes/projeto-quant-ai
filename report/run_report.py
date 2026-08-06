@@ -56,6 +56,17 @@ CONFIGS_TESTED = [
     "mantido 5 folds fixos como esquema oficial",
     "HAR-RV + termo de leverage (rv_d x indicador de retorno negativo) -- sem "
     "efeito (multicolinearidade com rv_d/rv_w/rv_m)",
+    "Risco fiscal REFINADO v2 (surpresa + sentimento FinBERT-PT-BR, 15/15 "
+    "janelas coletadas, 22 dias com manchete real) -- com dado parcial (12/15) "
+    "parecia ajudar (R2 +0.073, 3 de 5 folds), mas com a coleta completa "
+    "INVERTEU (R2 -0.568) -- artefato de amostra pequena, descartado",
+    "Pesquisa na literatura (Kambouroudis et al. 2021; Barndorff-Nielsen, "
+    "Kinnebrock & Shephard 2010) + 3 extensoes testadas com R2 pooled: "
+    "overnight return (gap fechamento->abertura), leverage via semivariancia "
+    "(rv_d_pos/rv_d_neg, decomposicao aditiva em vez da interacao "
+    "multiplicativa) e ensemble (media das 3 variantes) -- nenhuma moveu o "
+    "R2 de forma perceptivel (delta entre +0.004 e -0.001, dentro do ruido); "
+    "todas continuam perdendo pra persistencia pura",
 ]
 
 

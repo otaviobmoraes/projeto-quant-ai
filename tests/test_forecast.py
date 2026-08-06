@@ -72,6 +72,79 @@ def test_har_features_from_variance_matches_har_features():
     assert forecast.har_features(prices).equals(forecast.har_features_from_variance(variance))
 
 
+def test_overnight_variance_manual_calc():
+    idx = pd.date_range("2024-01-01", periods=3, freq="B")
+    open_prices = pd.Series([5.0, 5.2, 5.15], index=idx)
+    close = pd.Series([5.05, 5.18, 5.20], index=idx)
+    prev_close = close.shift(1)
+
+    result = forecast.overnight_variance(open_prices, prev_close)
+
+    assert pd.isna(result.iloc[0])  # sem close anterior no 1o dia
+    expected_day2 = np.log(5.2 / 5.05) ** 2
+    assert result.iloc[1] == pytest.approx(expected_day2)
+
+
+def test_overnight_variance_zero_when_open_equals_prev_close():
+    idx = pd.date_range("2024-01-01", periods=2, freq="B")
+    open_prices = pd.Series([5.0, 5.05], index=idx)
+    prev_close = pd.Series([np.nan, 5.05], index=idx)
+
+    result = forecast.overnight_variance(open_prices, prev_close)
+
+    assert result.iloc[1] == pytest.approx(0.0)
+
+
+def test_semivariance_features_splits_by_return_sign():
+    idx = pd.date_range("2024-01-01", periods=4, freq="B")
+    daily_variance = pd.Series([1.0, 2.0, 3.0, 4.0], index=idx)
+    returns = pd.Series([0.01, -0.02, 0.03, -0.04], index=idx)
+
+    result = forecast.semivariance_features(daily_variance, returns)
+
+    assert list(result.columns) == ["rv_d_pos", "rv_d_neg"]
+    assert result["rv_d_pos"].tolist() == [1.0, 0.0, 3.0, 0.0]
+    assert result["rv_d_neg"].tolist() == [0.0, 2.0, 0.0, 4.0]
+
+
+def test_semivariance_features_sum_equals_daily_variance():
+    idx = pd.date_range("2024-01-01", periods=50, freq="B")
+    rng = np.random.default_rng(5)
+    daily_variance = pd.Series(np.abs(rng.normal(1, 0.3, 50)), index=idx)
+    returns = pd.Series(rng.normal(0, 0.01, 50), index=idx)
+
+    result = forecast.semivariance_features(daily_variance, returns)
+
+    assert (result["rv_d_pos"] + result["rv_d_neg"]).equals(daily_variance)
+
+
+def test_build_dataset_extended_has_expected_columns():
+    prices = _price_series(100, seed=13)
+    open_ = prices * 1.001  # abertura levemente diferente do fechamento
+
+    dataset = forecast.build_dataset_extended(prices, open_, horizon=21)
+
+    assert set(dataset.columns) == {
+        "rv_d", "rv_w", "rv_m", "target", "rv_d_pos", "rv_d_neg", "overnight",
+    }
+    assert len(dataset) > 0
+    assert (dataset["rv_d_pos"] + dataset["rv_d_neg"] - dataset["rv_d"]).abs().max() < 1e-12
+
+
+def test_build_dataset_extended_overnight_has_no_lookahead():
+    prices = _price_series(100, seed=14)
+    open_ = prices * 1.001
+
+    full = forecast.build_dataset_extended(prices, open_, horizon=21)
+    truncated = forecast.build_dataset_extended(prices.iloc[:60], open_.iloc[:60], horizon=21)
+
+    common_idx = full.index.intersection(truncated.index)
+    assert len(common_idx) > 0
+    pd.testing.assert_series_equal(
+        full.loc[common_idx, "overnight"], truncated.loc[common_idx, "overnight"]
+    )
+
+
 def test_forward_target_from_variance_matches_forward_target():
     prices = _price_series(60, seed=12)
     variance = forecast.log_returns(prices) ** 2

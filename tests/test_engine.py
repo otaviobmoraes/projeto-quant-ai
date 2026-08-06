@@ -60,6 +60,47 @@ def test_generate_oos_rv_forecast_uses_provided_folds():
     assert forecast_by_step.index.equals(expected_index.sort_values())
 
 
+def test_generate_ensemble_forecast_is_mean_of_individual_forecasts():
+    from vol.forecast import BASELINE_FEATURES, build_dataset
+
+    prices = _price_series(400, seed=15)
+    dataset = build_dataset(prices, horizon=21)
+    # 2 conjuntos de features (aqui identicos so pra validar a mecanica de
+    # media) -- a media de 2 previsoes iguais deve bater com cada uma delas.
+    feature_sets = [BASELINE_FEATURES, BASELINE_FEATURES]
+
+    ensemble = engine.generate_ensemble_forecast(
+        dataset, feature_sets, horizon=21, n_splits=4, embargo_days=5
+    )
+    single = engine.generate_oos_rv_forecast(
+        dataset, BASELINE_FEATURES, horizon=21, n_splits=4, embargo_days=5
+    )
+
+    pd.testing.assert_series_equal(ensemble, single, check_names=False)
+
+
+def test_generate_ensemble_forecast_averages_different_feature_sets():
+    from vol.forecast import build_dataset
+
+    prices = _price_series(400, seed=16)
+    dataset = build_dataset(prices, horizon=21)
+    rng = np.random.default_rng(17)
+    dataset["extra_feature"] = rng.normal(0, 1, len(dataset))
+
+    forecasts = engine.generate_ensemble_forecast(
+        dataset, [["rv_d", "rv_w", "rv_m"], ["rv_d", "rv_w", "rv_m", "extra_feature"]],
+        horizon=21, n_splits=4, embargo_days=5,
+    )
+
+    f1 = engine.generate_oos_rv_forecast(dataset, ["rv_d", "rv_w", "rv_m"], horizon=21, n_splits=4, embargo_days=5)
+    f2 = engine.generate_oos_rv_forecast(
+        dataset, ["rv_d", "rv_w", "rv_m", "extra_feature"], horizon=21, n_splits=4, embargo_days=5
+    )
+
+    expected = (f1 + f2) / 2
+    pd.testing.assert_series_equal(forecasts.sort_index(), expected.rename("rv_forecast").sort_index())
+
+
 def test_evaluate_directional_accuracy_per_fold_structure():
     from vol.forecast import BASELINE_FEATURES, build_dataset
 

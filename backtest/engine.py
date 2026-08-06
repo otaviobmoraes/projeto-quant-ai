@@ -65,6 +65,44 @@ def generate_oos_rv_forecast(
     return pd.concat(preds).sort_index()
 
 
+def generate_ensemble_forecast(
+    dataset: pd.DataFrame,
+    feature_sets: list[list[str]],
+    horizon: int,
+    n_splits: int,
+    embargo_days: int,
+    log_target: bool = True,
+    folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
+) -> pd.Series:
+    """Media simples das previsoes OOS de varios conjuntos de features
+    (model averaging) em vez de uma unica especificacao "vencedora".
+
+    Motivacao (Clements, 2024, Journal of Forecasting -- "forecast
+    combination puzzle"; literatura de model averaging pra RV): combinar
+    previsoes de alguns modelos HAR razoaveis tende a bater a escolha de um
+    unico "melhor" modelo, e evita o risco de escolher uma configuracao que
+    so pareceu boa por acaso (o mesmo risco de overfitting de selecao que
+    motivou nao adotar o esquema de walk-forward por passo como oficial,
+    ver CONFIGS_TESTED em report/run_report.py).
+
+    Todos os `feature_sets` sao avaliados nos MESMOS `folds` (gerados uma vez
+    se `folds=None`), pra que a media seja sobre o mesmo periodo de teste em
+    todos eles.
+    """
+    if folds is None:
+        folds = purged_walk_forward_splits(
+            dataset, n_splits=n_splits, horizon=horizon, embargo_days=embargo_days
+        )
+    forecasts = [
+        generate_oos_rv_forecast(
+            dataset, features, horizon, n_splits, embargo_days, log_target=log_target, folds=folds
+        )
+        for features in feature_sets
+    ]
+    combined = pd.concat(forecasts, axis=1)
+    return combined.mean(axis=1).rename("rv_forecast")
+
+
 def evaluate_directional_accuracy_per_fold(
     dataset: pd.DataFrame,
     feature_cols: list[str],
