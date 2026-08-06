@@ -163,6 +163,53 @@ def build_dataset_extended(
     return df.dropna()
 
 
+GLOBAL_RISK_FEATURES = BASELINE_FEATURES + ["vix_level", "vix_change", "dxy_return"]
+
+
+def global_risk_features(vix_close: pd.Series, dxy_close: pd.Series) -> pd.DataFrame:
+    """Features de risco global a partir do VIX (^VIX) e do indice dolar
+    (DXY): vix_level (nivel -- ja e um indice de vol implicita, alto =
+    aversao a risco), vix_change (variacao dia a dia -- choque agudo) e
+    dxy_return (retorno log do DXY -- dolar se fortalecendo globalmente
+    costuma coincidir com estresse em moedas de mercado emergente).
+
+    Calculadas no calendario NATIVO de vix_close/dxy_close (bolsa americana),
+    ANTES de alinhar ao calendario da B3 -- ver build_dataset_with_global_risk.
+    """
+    vix_level = vix_close.rename("vix_level")
+    vix_change = vix_close.diff().rename("vix_change")
+    dxy_return = (np.log(dxy_close).diff()).rename("dxy_return")
+    return pd.concat([vix_level, vix_change, dxy_return], axis=1)
+
+
+def build_dataset_with_global_risk(
+    close: pd.Series,
+    vix_close: pd.Series,
+    dxy_close: pd.Series,
+    horizon: int = 21,
+    daily_variance: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Dataset HAR baseline + risco global (VIX + DXY, ver global_risk_features).
+    Diferente de tudo testado antes no projeto (overnight, leverage, noticia,
+    credibilidade): e a primeira feature EXOGENA que nao deriva do proprio
+    preco/imprensa do USD/BRL.
+
+    `vix_close`/`dxy_close`: podem estar num calendario diferente do de
+    `close` (bolsa americana vs B3) -- alinhados por ultimo valor conhecido
+    (ffill), sem look-ahead.
+    """
+    variance = daily_variance if daily_variance is not None else log_returns(close) ** 2
+    df = har_features_from_variance(variance)
+    df["target"] = forward_target_from_variance(variance, horizon)
+
+    risk = global_risk_features(vix_close, dxy_close).reindex(df.index, method="ffill")
+    df["vix_level"] = risk["vix_level"]
+    df["vix_change"] = risk["vix_change"]
+    df["dxy_return"] = risk["dxy_return"]
+
+    return df.dropna()
+
+
 def chronological_split(dataset: pd.DataFrame, test_size: float = 0.2) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split cronologico simples (sem embaralhar, treino sempre antes do teste
     no tempo). Avaliacao preliminar -- o walk-forward purgado fica em backtest/.

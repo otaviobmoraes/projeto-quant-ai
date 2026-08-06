@@ -145,6 +145,43 @@ def test_build_dataset_extended_overnight_has_no_lookahead():
     )
 
 
+def test_global_risk_features_computes_level_change_and_return():
+    idx = pd.date_range("2024-01-01", periods=3, freq="B")
+    vix = pd.Series([15.0, 18.0, 16.0], index=idx)
+    dxy = pd.Series([100.0, 101.0, 100.5], index=idx)
+
+    result = forecast.global_risk_features(vix, dxy)
+
+    assert list(result.columns) == ["vix_level", "vix_change", "dxy_return"]
+    assert result["vix_level"].tolist() == [15.0, 18.0, 16.0]
+    assert pd.isna(result["vix_change"].iloc[0])
+    assert result["vix_change"].iloc[1] == pytest.approx(3.0)
+    assert result["dxy_return"].iloc[1] == pytest.approx(np.log(101.0 / 100.0))
+
+
+def test_build_dataset_with_global_risk_aligns_different_calendar_no_lookahead():
+    prices = _price_series(200, seed=18)
+    # VIX/DXY num calendario DIFERENTE (menos dias) do USD/BRL -- forca o
+    # ffill a entrar em acao, como aconteceria de verdade (bolsa americana
+    # vs B3).
+    sparse_idx = prices.index[::2]
+    vix = pd.Series(15.0, index=sparse_idx)
+    dxy = pd.Series(100.0, index=sparse_idx)
+
+    dataset = forecast.build_dataset_with_global_risk(prices, vix, dxy, horizon=21)
+
+    assert set(dataset.columns) == {"rv_d", "rv_w", "rv_m", "target", "vix_level", "vix_change", "dxy_return"}
+    assert len(dataset) > 0
+
+    full = forecast.build_dataset_with_global_risk(prices, vix, dxy, horizon=21)
+    truncated = forecast.build_dataset_with_global_risk(prices.iloc[:100], vix, dxy, horizon=21)
+    common_idx = full.index.intersection(truncated.index)
+    assert len(common_idx) > 0
+    pd.testing.assert_series_equal(
+        full.loc[common_idx, "vix_level"], truncated.loc[common_idx, "vix_level"]
+    )
+
+
 def test_forward_target_from_variance_matches_forward_target():
     prices = _price_series(60, seed=12)
     variance = forecast.log_returns(prices) ** 2

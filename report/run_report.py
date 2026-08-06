@@ -67,6 +67,11 @@ CONFIGS_TESTED = [
     "multiplicativa) e ensemble (media das 3 variantes) -- nenhuma moveu o "
     "R2 de forma perceptivel (delta entre +0.004 e -0.001, dentro do ruido); "
     "todas continuam perdendo pra persistencia pura",
+    "Risco global exogeno (VIX + DXY via yfinance, primeira feature que NAO "
+    "deriva do proprio preco/imprensa do USD/BRL) -- R2 pooled: baseline "
+    "-0.011, so VIX -0.020 (pior), so DXY -0.012 (sem efeito), VIX+DXY "
+    "-0.020 -- nenhuma ajuda; persistencia continua em +0.134 no mesmo "
+    "periodo. 12a tentativa consecutiva sem melhorar o R2 nesse dataset.",
 ]
 
 
