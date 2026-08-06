@@ -66,7 +66,14 @@ CONFIGS_TESTED = [
     "(rv_d_pos/rv_d_neg, decomposicao aditiva em vez da interacao "
     "multiplicativa) e ensemble (media das 3 variantes) -- nenhuma moveu o "
     "R2 de forma perceptivel (delta entre +0.004 e -0.001, dentro do ruido); "
-    "todas continuam perdendo pra persistencia pura",
+    "todas continuam perdendo pra persistencia pura. "
+    "*** RESSALVA (descoberta depois): esse teste de overnight/leverage e "
+    "INVALIDO. Os bars de BRL=X do yfinance tem open ~= close (mesmo "
+    "snapshot: |close-open| medio = 0.00043 vs gap entre barras = 0.03082, "
+    "72x maior), entao a feature 'overnight' media o retorno do DIA (corr "
+    "0.998 com retorno diario ao quadrado), nao um gap overnight -- e o "
+    "sinal do retorno usado na semivariancia vem defasado 1 dia. Refazer "
+    "com OHLC real do futuro B3 (data/b3_futures.py). ***",
     "Risco global exogeno (VIX + DXY via yfinance, primeira feature que NAO "
     "deriva do proprio preco/imprensa do USD/BRL) -- R2 pooled: baseline "
     "-0.011, so VIX -0.020 (pior), so DXY -0.012 (sem efeito), VIX+DXY "
@@ -98,6 +105,19 @@ CONFIGS_TESTED = [
     "tentativa consecutiva sem melhorar o modelo nesse dataset -- "
     "simplicidade (persistencia pura, sem nenhuma camada) e o resultado "
     "mais robusto encontrado.",
+    "VALIDACAO DE FONTE DE PRECO (futuro de dolar da B3, BVBG-086, vs "
+    "yfinance BRL=X, arbitrado pelo PTAX do BCB): o AJUSTE do futuro B3 bate "
+    "com o PTAX no MESMO dia (corr 0.768, k=0); ja o `close` do yfinance so "
+    "alinha com defasagem de 1 dia (corr 0.528 em k=+1 vs 0.391 em k=0). "
+    "Causa: os bars de FX do yfinance tem open ~= close (correlacao 0.99998 "
+    "entre eles) -- nao e fechamento de fim de pregao, e um snapshot no "
+    "limite do dia. IMPACTO: (a) o baseline OFICIAL usa Parkinson, que so "
+    "depende de high/low, e ESSES estao corretamente datados (PTAX cai "
+    "dentro do range do mesmo dia em 98.9% dos pregoes) -- as conclusoes "
+    "centrais do projeto sobrevivem; (b) features derivadas de `close` "
+    "(overnight, sinal da semivariancia) e os precos de entrada/saida do "
+    "backtest estavam defasados 1 dia. Migracao para o futuro da B3 "
+    "(instrumento efetivamente negociado, com OHLC e ajuste oficiais).",
 ]
 
 
