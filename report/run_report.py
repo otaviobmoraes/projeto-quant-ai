@@ -17,8 +17,8 @@ from scipy.stats import kurtosis as _kurtosis
 from scipy.stats import skew as _skew
 
 from backtest import ablation, engine
-from backtest.metrics import deflated_sharpe_ratio
-from backtest.walk_forward import purged_walk_forward_splits_by_step
+from backtest.metrics import deflated_sharpe_ratio, pooled_oos_metrics
+from backtest.walk_forward import purged_walk_forward_splits, purged_walk_forward_splits_by_step
 from credibility import ablation as credibility_ablation
 from data.gdelt_news import (
     TONE_PROCESSED_PATH,
@@ -32,7 +32,7 @@ from report import plots, summary
 from sentiment.daily_index import FISCAL_SENTIMENT_PROCESSED_PATH
 from strategy import signal, sizing
 from vol import implied, realized
-from vol.forecast import BASELINE_FEATURES, NEWS_FEATURES, build_dataset, fit_har
+from vol.forecast import BASELINE_FEATURES, NEWS_FEATURES, build_dataset, fit_har, persistence_forecast
 
 OUT_DIR = Path(__file__).resolve().parent / "output"
 
@@ -72,6 +72,20 @@ CONFIGS_TESTED = [
     "-0.011, so VIX -0.020 (pior), so DXY -0.012 (sem efeito), VIX+DXY "
     "-0.020 -- nenhuma ajuda; persistencia continua em +0.134 no mesmo "
     "periodo. 12a tentativa consecutiva sem melhorar o R2 nesse dataset.",
+    "DECISAO: persistencia pura (rv_m) adotada como previsao OFICIAL da "
+    "estrategia (secao 5) no lugar do HAR-RV -- bateu o HAR-RV em TODAS as "
+    "13 comparacoes de R2 pooled feitas neste projeto (R2 +0.126 vs -0.510 "
+    "no esquema oficial). O backtest ilustrativo (Sharpe) PIOROU com essa "
+    "troca (1.087 -> 0.014) apesar do R2 melhorar -- diagnostico: "
+    "RV_previsto (persistencia) e IV_proxy tem correlacao ~0.994 (IV_proxy "
+    "= RV_trailing x premio fixo, persistencia = RV_trailing quase igual), "
+    "entao o spread que decide compra/venda e dominado por uma constante "
+    "multiplicativa, nao por sinal -- R2 mede acerto medio em TODOS os "
+    "dias, taxa de acerto mede so o subconjunto pequeno e nao-aleatorio de "
+    "dias em que esse spread quase-constante cruzou a banda por ruido de "
+    "curto prazo. R2 (pooled, medido contra o valor real) continua a "
+    "metrica confiavel; Sharpe do backtest ilustrativo nao deveria ser "
+    "usado pra escolher entre modelos ate haver IV real historica.",
 ]
 
 
@@ -154,6 +168,24 @@ def main() -> None:
     )
     print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(result['baseline_pooled'])}")
     print(f"Com noticia:                   {summary.format_metrics(result['com_noticia_pooled'])}")
+
+    # Persistencia pura (rv_m, sem nenhum parametro ajustado) como segundo
+    # baseline de referencia -- em TODAS as comparacoes feitas neste projeto
+    # (13 tentativas: HAR-RV puro, com noticia/credibilidade/risco fiscal em
+    # varias formas, extensoes de literatura, risco global exogeno), a
+    # persistencia bateu o HAR-RV. Por isso a secao 5 (backtest) usa
+    # persistencia como previsao oficial em vez do HAR-RV -- essa linha so
+    # documenta a comparacao no dataset Parkinson padrao (nao exatamente o
+    # mesmo recorte trimado por disponibilidade de noticia do `result`
+    # acima, mas o mesmo esquema oficial de 5 folds).
+    _persist_close, _persist_daily_variance = realized.load_parkinson_prices_and_variance()
+    _persist_dataset = build_dataset(_persist_close, horizon=21, daily_variance=_persist_daily_variance)
+    _persist_folds = purged_walk_forward_splits(_persist_dataset, n_splits=5, horizon=21, embargo_days=5)
+    _persist_forecast = persistence_forecast(_persist_dataset).reindex(
+        pd.concat([test["target"] for _, test in _persist_folds]).index
+    )
+    _persist_metrics = pooled_oos_metrics(_persist_dataset["target"], _persist_forecast)
+    print(f"Persistencia pura (rv_m):      {summary.format_metrics(_persist_metrics)}")
 
     md = summary.ablation_summary_md(result, CONFIGS_TESTED)
     (OUT_DIR / "ablation_summary.md").write_text(md, encoding="utf-8")
@@ -293,15 +325,14 @@ def main() -> None:
         )
 
         dataset = build_dataset(close, horizon=21, daily_variance=daily_variance)
-        # Reestima os coeficientes a cada ~21 dias (passo mensal) em vez de 5
-        # folds fixos (~130 dias cada) -- o sinal de alocacao reage mais
-        # rapido a mudanca de regime (ex.: salto de risco fiscal).
-        step_folds = purged_walk_forward_splits_by_step(
-            dataset, min_train_size=252, step_size=21, horizon=21, embargo_days=5
-        )
-        rv_forecast = engine.generate_oos_rv_forecast(
-            dataset, BASELINE_FEATURES, horizon=21, n_splits=5, embargo_days=5, folds=step_folds
-        )
+        # Persistencia pura (rv_m) em vez de HAR-RV: em TODAS as 13
+        # comparacoes feitas neste projeto (HAR-RV puro, com camadas de
+        # noticia/credibilidade/risco fiscal, extensoes de literatura,
+        # risco global exogeno), a persistencia bateu o HAR-RV no R2 pooled
+        # -- ver secao 1 (+0.126 vs -0.510 no esquema oficial). Sem
+        # coeficiente nenhum pra ajustar, entao nao precisa de walk-forward
+        # (nao ha risco de overfitting num modelo sem parametros).
+        rv_forecast = persistence_forecast(dataset)
 
         iv_df = implied.load_iv_atm_processed(target_days=21)
         calib_date = iv_df["refdate"].iloc[-1]
@@ -312,6 +343,27 @@ def main() -> None:
 
         print(f"Calibracao: {calib_date.date()}  IV_real={iv_real:.2f}%  "
               f"RV_trailing={rv_series.loc[rv_calib_idx]:.2f}%  premio_de_risco={risk_premium:.3f}x")
+
+        # Diagnostico: RV_previsto (persistencia) e IV_proxy sao QUASE A
+        # MESMA SERIE -- IV_proxy = RV_trailing_21d x 0.847 (premio de risco
+        # fixo), e persistencia = RV_trailing_22d (rv_m). Correlacao ~0.994
+        # nesse periodo. Isso significa que o spread que decide compra/venda
+        # e dominado por uma constante multiplicativa (~1.18x), nao por
+        # sinal genuino -- o momento exato em que ele cruza a banda de 1.0
+        # e ditado por ruido de curtissimo prazo na vol recente, nao pela
+        # qualidade da previsao. E por isso que trocar HAR-RV por
+        # persistencia MELHOROU o R2 (+0.126 vs -0.510, secao 1) mas
+        # PIOROU o backtest (Sharpe 1.087->0.014): R2 mede acerto medio em
+        # TODOS os dias da amostra; taxa de acerto mede so os poucos dias
+        # em que o spread cruzou a banda -- um subconjunto pequeno e
+        # nao-aleatorio, escolhido por um limiar sensivel a ruido quando a
+        # previsao e quase colinear com a propria proxy de IV. Reforca por
+        # que a secao 5 e ILUSTRATIVA: o problema maior nao e qual modelo
+        # usamos, e a IV-proxy ser um multiplo constante da RV trailing.
+        _corr = rv_forecast.corr(iv_proxy_series.reindex(rv_forecast.index))
+        print(f"Diagnostico: correlacao RV_previsto x IV_proxy = {_corr:.3f} "
+              "(quase colineares -- ver nota no codigo sobre por que isso "
+              "desconecta R2 de taxa de acerto)")
 
         trades = engine.run_backtest(
             close, rv_forecast, iv_proxy_series, horizon=21, band_pct=1.0, target_vega=1000.0, spread_pct=0.05
@@ -368,6 +420,11 @@ def main() -> None:
             print("Nenhum trade gerado com esses parametros.")
 
         _print_header("5b. Risco fiscal (GDELT) na previsao de RV -- compara rendimento dos trades")
+        print(
+            "Nota: esta secao (e a 5c) testam se a camada ajuda um HAR-RV AJUSTADO -- "
+            "pergunta de pesquisa diferente da secao 5 acima, que ja usa persistencia "
+            "(sem parametros) como previsao oficial por bater o HAR-RV em toda comparacao feita.\n"
+        )
         if VOLUME_PROCESSED_PATH.exists():
             fiscal_news = load_fiscal_risk_series()
             dataset_fiscal = build_dataset(
