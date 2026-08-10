@@ -107,7 +107,8 @@ CONFIGS_TESTED = [
     "mais robusto encontrado.",
     "VALIDACAO DE FONTE DE PRECO (futuro de dolar da B3, BVBG-086, vs "
     "yfinance BRL=X, arbitrado pelo PTAX do BCB): o AJUSTE do futuro B3 bate "
-    "com o PTAX no MESMO dia (corr 0.768, k=0); ja o `close` do yfinance so "
+    "com o PTAX no MESMO dia (corr 0.673 na amostra completa de 830 pregoes; "
+    "0.768 na janela inicial de 78 dias, k=0); ja o `close` do yfinance so "
     "alinha com defasagem de 1 dia (corr 0.528 em k=+1 vs 0.391 em k=0). "
     "Causa: os bars de FX do yfinance tem open ~= close (correlacao 0.99998 "
     "entre eles) -- nao e fechamento de fim de pregao, e um snapshot no "
