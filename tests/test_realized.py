@@ -143,3 +143,70 @@ def test_load_parkinson_prices_and_variance_missing_file_raises(tmp_path, monkey
 
     with pytest.raises(FileNotFoundError):
         realized.load_parkinson_prices_and_variance()
+
+
+def test_load_b3_futures_prices_and_variance_rescales_and_computes_parkinson(tmp_path, monkeypatch):
+    idx = pd.date_range("2024-01-01", periods=30, tz="America/Sao_Paulo")
+    rng = np.random.default_rng(1)
+    settlement = 5000.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 30)))  # BRL por 1000 USD
+    noise = np.abs(rng.normal(0, 0.003, 30))
+    fut_df = pd.DataFrame(
+        {
+            "date": idx,
+            "ticker": ["DOLF24"] * 30,
+            "settlement": settlement,
+            "open": settlement,
+            "last": settlement,
+            "high": settlement * (1 + noise),
+            "low": settlement * (1 - noise),
+            "contract_changed": [False] * 30,
+        }
+    )
+    path = tmp_path / "b3_dol_futures.parquet"
+    fut_df.to_parquet(path)
+    monkeypatch.setattr(realized, "B3_FUTURES_PROCESSED_PATH", path)
+
+    close_out, variance = realized.load_b3_futures_prices_and_variance()
+
+    assert len(close_out) == 30
+    # ajuste vem em BRL/1000 USD -> deve sair na escala do spot (~5, nao ~5000)
+    assert 3.0 < close_out.mean() < 8.0
+    assert (variance.dropna() >= 0).all()
+
+
+def test_load_b3_futures_variance_is_scale_invariant(tmp_path, monkeypatch):
+    """Parkinson usa ln(high/low), entao dividir por 1000 nao pode alterar a
+    variancia -- garante que o reescalonamento nao contaminou o estimador."""
+    idx = pd.date_range("2024-01-01", periods=10, tz="America/Sao_Paulo")
+    base = np.linspace(5000, 5100, 10)
+    fut_df = pd.DataFrame(
+        {
+            "date": idx,
+            "ticker": ["DOLF24"] * 10,
+            "settlement": base,
+            "open": base,
+            "last": base,
+            "high": base * 1.01,
+            "low": base * 0.99,
+            "contract_changed": [False] * 10,
+        }
+    )
+    path = tmp_path / "b3_dol_futures.parquet"
+    fut_df.to_parquet(path)
+    monkeypatch.setattr(realized, "B3_FUTURES_PROCESSED_PATH", path)
+
+    _, variance = realized.load_b3_futures_prices_and_variance()
+
+    expected = realized.parkinson_daily_variance(
+        pd.Series(base * 1.01, index=idx), pd.Series(base * 0.99, index=idx)
+    )
+    # check_freq=False: o round-trip pelo parquet perde o atributo `freq` do
+    # indice; o que importa aqui sao os valores.
+    pd.testing.assert_series_equal(variance, expected, check_names=False, check_freq=False)
+
+
+def test_load_b3_futures_prices_and_variance_missing_file_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(realized, "B3_FUTURES_PROCESSED_PATH", tmp_path / "missing.parquet")
+
+    with pytest.raises(FileNotFoundError):
+        realized.load_b3_futures_prices_and_variance()

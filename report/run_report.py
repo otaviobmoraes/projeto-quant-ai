@@ -118,6 +118,29 @@ CONFIGS_TESTED = [
     "(overnight, sinal da semivariancia) e os precos de entrada/saida do "
     "backtest estavam defasados 1 dia. Migracao para o futuro da B3 "
     "(instrumento efetivamente negociado, com OHLC e ajuste oficiais).",
+    "*** RESULTADO CENTRAL REVISTO apos migrar pro futuro da B3 (830 "
+    "pregoes, 2023-04 a 2026-08): o R2 POSITIVO NAO SOBREVIVEU. Com "
+    "Parkinson -- yfinance: HAR-RV -0.066 / persistencia +0.126 (persistencia "
+    "ganha); futuro B3: HAR-RV -0.255 / persistencia -0.367 (AMBOS "
+    "negativos). Cross-check com estimador close-to-close sobre o ajuste "
+    "oficial confirma: HAR-RV -0.155 / persistencia -0.766. Causa "
+    "diagnosticada: autocorrelacao da variancia diaria em lag 5/21 e de "
+    "0.096/0.025 no futuro B3 contra 0.190/0.074 no yfinance -- o alvo de "
+    "21 dias depende dessa memoria longa, que existe no spot 24h mas nao no "
+    "futuro. Duas leituras nao totalmente separaveis: (a) o range de 24h "
+    "media mais do processo e reduz ruido de medicao (efeito estatistico "
+    "legitimo); (b) os bars anomalos do yfinance inflam a autocorrelacao "
+    "(artefato). Como a estrategia negocia opcao SOBRE O FUTURO, o alvo "
+    "economicamente correto e a RV do futuro -- e nela nada funciona. ***",
+    "Varredura de horizonte na fonte B3 (R2 pooled, 5 folds purgados): "
+    "h=1 HAR-RV +0.049 / persistencia -0.022; h=3 -0.027/-0.037; h=5 "
+    "-0.102/-0.075; h=10 -0.155/-0.158; h=15 -0.197/-0.245; h=21 "
+    "-0.255/-0.367. Ou seja: existe previsibilidade fraca porem REAL em "
+    "h=1 (e o HAR-RV bate a persistencia la), decaindo monotonicamente ate "
+    "ficar bem negativa em h=21. Consistente com Corsi (2009), que desenhou "
+    "o HAR-RV para horizonte curto. DIAGNOSTICO: ha descasamento entre onde "
+    "existe sinal (1 dia) e o horizonte que a estrategia precisa (21 dias, "
+    "prazo da opcao) -- nao e falta de feature, e o horizonte.",
 ]
 
 

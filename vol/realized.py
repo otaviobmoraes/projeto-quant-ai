@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from data.b3_futures import PROCESSED_PATH as B3_FUTURES_PROCESSED_PATH
 from data.fx_spot import PROCESSED_PATH as FX_SPOT_PROCESSED_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 
@@ -73,6 +74,35 @@ def load_parkinson_prices_and_variance() -> tuple[pd.Series, pd.Series]:
     fx = pd.read_parquet(FX_SPOT_PROCESSED_PATH).set_index("date").sort_index()
     variance = parkinson_daily_variance(fx["high"], fx["low"])
     return fx["close"], variance
+
+
+def load_b3_futures_prices_and_variance() -> tuple[pd.Series, pd.Series]:
+    """Le o futuro de dolar da B3 ja coletado (data/b3_futures.py) e devolve
+    (preco de ajuste, variancia diaria de Parkinson).
+
+    Fonte PREFERENCIAL do ponto de vista economico: a estrategia negocia
+    opcao SOBRE ESSE FUTURO (Black-76), entao a RV relevante e a do futuro,
+    nao a do spot. Alem disso o alinhamento de datas foi validado contra o
+    PTAX (corr 0.768 no mesmo dia), enquanto o `close` do yfinance so alinha
+    com defasagem de 1 dia -- ver data/b3_futures.py.
+
+    O preco de ajuste vem cotado em BRL por 1000 USD; e dividido por 1000
+    pra ficar na mesma escala do spot/PTAX. Parkinson usa ln(high/low), que
+    e invariante a escala -- a divisao nao afeta a variancia.
+
+    A serie troca de contrato a cada mes (rolagem). Parkinson e calculado
+    DENTRO de cada dia (high/low do mesmo pregao), entao e imune a emenda --
+    diferente de retorno de fechamento, que exigiria descartar o dia da
+    virada (coluna `contract_changed`).
+    """
+    if not B3_FUTURES_PROCESSED_PATH.exists():
+        raise FileNotFoundError(
+            f"{B3_FUTURES_PROCESSED_PATH} nao encontrado -- rode "
+            "data.b3_futures.load_dol_futures_processed(...) primeiro."
+        )
+    fut = pd.read_parquet(B3_FUTURES_PROCESSED_PATH).set_index("date").sort_index()
+    variance = parkinson_daily_variance(fut["high"], fut["low"])
+    return fut["settlement"] / 1000.0, variance
 
 
 def load_ptax_realized_vol(window: int = 21, tipo: str = "venda") -> pd.DataFrame:
