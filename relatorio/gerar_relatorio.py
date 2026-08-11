@@ -581,6 +581,39 @@ p("A escala é um parâmetro fixo (2,0 p.p.), deliberadamente não normalizado p
 p("A dispersão entre os respondentes do Focus entra como segunda variável, separada: ela mede "
   "desacordo entre analistas, um conceito relacionado mas distinto de distância da meta.")
 
+h3("O que a teoria realmente prevê — e por que isso importa para o teste")
+
+p("Há uma distinção aqui que inicialmente não respeitamos, e que muda a interpretação de todo o "
+  "resultado sobre credibilidade. O mecanismo de Barro-Gordon não prevê que perda de credibilidade "
+  "eleve a volatilidade em geral. Ele prevê algo mais específico: sob discrição, o incentivo do "
+  "Banco Central a tolerar inflação surpresa eleva ", after=2)
+rich(("assimetricamente", {"bold": True}),
+     " o risco de depreciação do real. A previsão é sobre a ",
+     ("forma", {"bold": True}),
+     " da distribuição — a cauda direita, o skew — e não sobre o ",
+     ("nível", {"bold": True}),
+     " de volatilidade.")
+
+p("Nossa ablação inicial testou θₜ como preditor da RV futura, que é uma grandeza de nível. "
+  "Encontrar ausência de efeito ali é evidência fraca contra a teoria, porque a teoria não faz "
+  "essa previsão com força. Reportar aquele nulo como refutação da hipótese de credibilidade foi "
+  "um erro de interpretação nosso.")
+
+callout(
+    "Por que o teste correto era inviável.",
+    "A previsão forte é sobre o skew IMPLÍCITO — extraído da superfície de opções. Como a B3 "
+    "sobrescreve a superfície diariamente e existe apenas um dia de histórico (Seção 7.1), esse "
+    "teste nunca foi possível com os dados disponíveis. A limitação de dados que impede validar a "
+    "tese central também impede validar a camada de credibilidade na dimensão certa.",
+    cor=BLUE,
+)
+
+p("O que é possível é testar a contraparte ", after=2)
+rich(("realizada", {"bold": True}),
+     ": se a perda de credibilidade cria risco assimétrico de depreciação, os retornos futuros do "
+     "USD/BRL deveriam apresentar assimetria positiva. Isso é mensurável com os dados que temos, e "
+     "os resultados estão na Seção 6.3.")
+
 pagebreak()
 
 # =====================================================================
@@ -797,8 +830,8 @@ table(
         ("14", "Risco fiscal v2 (surpresa + FinBERT)", "Parecia ajudar com dado parcial; inverteu com dado completo"),
         ("15", "Overnight + semivariância + ensemble", "INVÁLIDO — testado sobre dado defeituoso (ver 5.4)"),
         ("16", "Risco global exógeno (VIX + DXY)", "Não ajuda; VIX chega a piorar"),
-        ("17", "Persistência adotada como previsão oficial", "Único R² positivo — depois revisto"),
-        ("18", "Camadas como correção de resíduo da persistência", "Todas as 6 pioram"),
+        ("17", "Persistência adotada como previsão oficial", "Decisão revertida: vitória era da fonte defeituosa (5.6)"),
+        ("18", "Camadas como correção de resíduo da persistência", "Todas as 6 pioram — mas base equivocada (ver 5.6)"),
         ("19", "Validação de fonte de preço contra PTAX", "ERRO NOSSO encontrado: defasagem de 1 dia"),
         ("20", "Migração para o futuro de dólar da B3", "R² positivo NÃO sobrevive"),
         ("21", "Varredura de horizonte na fonte correta", "Sinal existe em 1 dia; ausente em 21"),
@@ -819,7 +852,24 @@ p("O primeiro resultado relevante foi negativo e veio cedo: o HAR-RV ajustado n�
   "persistência pura. Isso poderia significar duas coisas muito diferentes — que a regressão "
   "estava mal especificada, ou que não havia sinal a extrair. O teste com a persistência (item 4 "
   "da tabela) separou as hipóteses: como ela também apresentava desempenho fraco em termos "
-  "absolutos, o problema não estava na regressão.")
+  "absolutos, concluímos que o problema não estava na regressão.")
+
+callout(
+    "Correção importante — esta conclusão não sobreviveu.",
+    "A derrota do HAR-RV para a persistência era artefato da fonte de preço defeituosa. Na fonte "
+    "correta (futuro da B3), o HAR-RV vence a persistência em 5 dos 6 horizontes testados. A "
+    "Seção 5.7 detalha a inversão. Mantemos o relato original aqui porque ele explica decisões "
+    "tomadas na sequência — mas o leitor deve saber, desde já, que a premissa estava errada.",
+    cor=RED,
+)
+
+p("Este episódio merece uma crítica de processo que fazemos a nós mesmos. Um modelo ajustado "
+  "perdendo para um benchmark sem nenhum parâmetro é uma anomalia que pede investigação imediata: "
+  "ou a especificação está errada, ou os dados estão. Em vez de esgotar esse diagnóstico, "
+  "seguimos adiante adicionando camadas de informação cada vez mais elaboradas — FinBERT, "
+  "Barro-Gordon, risco fiscal. Se tivéssemos investigado a anomalia primeiro, provavelmente "
+  "teríamos chegado ao problema de fonte de dados muito antes, e boa parte do esforço nas camadas "
+  "teria sido poupado ou redirecionado.", italic=True)
 
 p("A troca do estimador de retorno ao quadrado pelo Parkinson (item 6) foi a primeira melhoria "
   "genuína, e por isso foi adotada: RMSE menor em todos os folds, não apenas na média — critério "
@@ -934,7 +984,43 @@ p("Um cross-check com estimador completamente diferente (retorno de fechamento s
   "oficial) confirmou o resultado no mesmo dado da B3, descartando a hipótese de que fosse "
   "artefato do estimador de Parkinson.")
 
-h2("5.6 O diagnóstico final: descasamento de horizonte")
+h2("5.6 A inversão que a fonte correta produziu no ranking dos modelos")
+
+p("Além de eliminar o R² positivo, a migração inverteu algo que sustentava boa parte das decisões "
+  "do projeto: qual modelo é o melhor. Comparando os dois em cada horizonte, na mesma metodologia:")
+
+venc_rows = []
+for h in ["1", "3", "5", "10", "15", "21"]:
+    y, b = R["horizonte"]["yfinance"][h], R["horizonte"]["b3"][h]
+    venc_rows.append((
+        f"{h} dia(s)",
+        "persistência" if y["persist_r2"] > y["har_r2"] else "HAR-RV",
+        "persistência" if b["persist_r2"] > b["har_r2"] else "HAR-RV",
+    ))
+table(["Horizonte", "Vencedor na fonte defeituosa", "Vencedor na fonte correta"], venc_rows,
+      widths=[1.4, 2.5, 2.5], highlight={0, 1, 3, 4, 5})
+
+p("Na fonte defeituosa, a persistência vence em 6 de 6 horizontes. Na fonte correta, o HAR-RV "
+  "vence em 5 de 6. A afirmação “a persistência bate o HAR-RV”, que aparece repetidamente no "
+  "registro de configurações do projeto e motivou a adoção da persistência como previsão oficial, "
+  "era uma propriedade do dado defeituoso — não do fenômeno.")
+
+callout(
+    "Consequência a jusante.",
+    "O experimento de correção de resíduo (item 18 da tabela de configurações) testou as seis "
+    "camadas de informação como correção da PERSISTÊNCIA, precisamente porque a acreditávamos o "
+    "melhor baseline. Na fonte correta ela não é. Aquele teste foi construído sobre a base "
+    "errada e precisaria ser refeito sobre o HAR-RV para ser conclusivo — está listado nos "
+    "próximos passos.",
+    cor=RED,
+)
+
+p("Registramos isso com destaque porque é o exemplo mais claro, em todo o projeto, de como um "
+  "defeito silencioso de dados não produz apenas um número errado: ele reorganiza o ranking dos "
+  "modelos, redireciona a agenda de pesquisa e contamina experimentos construídos depois. "
+  "Nenhum teste unitário pegaria isso — só a validação contra uma fonte independente.")
+
+h2("5.7 O diagnóstico final: descasamento de horizonte")
 
 p("Restava explicar por que a fonte importava tanto. A resposta está na estrutura de memória da "
   "série — precisamente o que a previsão de longo horizonte explora:")
@@ -1031,7 +1117,56 @@ p("A interpretação é direta e vale explicitar: a persistência não tem nenhu
   "estimação. Se a informação adicionada não carrega sinal real, o modelo ajusta ruído — e "
   "generaliza pior. A simplicidade, aqui, não é preguiça: é a escolha estatisticamente superior.")
 
-h2("6.3 Backtest de P&L e por que ele não deve ser levado a sério")
+h2("6.3 Credibilidade testada na dimensão certa: assimetria")
+
+p("Como discutido na Seção 2.8, a previsão de Barro-Gordon é sobre a assimetria da distribuição, "
+  "não sobre o nível de volatilidade. Refizemos o teste usando a assimetria realizada dos retornos "
+  "futuros do futuro de dólar como alvo.")
+
+rich("A direção esperada é precisa e falseável: ",
+     ("credibilidade baixa deveria coincidir com assimetria alta", {"bold": True}),
+     " (risco de depreciação concentrado à direita). Ou seja, a correlação entre θₜ e a assimetria "
+     "futura deveria ser ",
+     ("negativa", {"bold": True}), ".")
+
+p("Um cuidado estatístico foi decisivo aqui. Janelas de assimetria futura se sobrepõem: "
+  "observações consecutivas compartilham quase todos os retornos, o que infla artificialmente a "
+  "significância. Reportamos as duas versões para tornar o efeito visível:")
+
+sk = R["credibilidade_skew"]
+sk_rows = []
+for h in ["10", "21", "42"]:
+    d = sk[h]
+    direcao = "contrária à teoria" if d["r_independentes"] > 0 else "a favor da teoria"
+    sk_rows.append((
+        f"{h} dias",
+        f"r = {num(d['r_sobrepostas'])}  (p = {num(d['p_sobrepostas'])})",
+        f"r = {num(d['r_independentes'])}  (p = {num(d['p_independentes'])}, n = {d['n_independentes']})",
+        direcao,
+    ))
+table(["Horizonte", "Janelas sobrepostas (p inflado)", "Janelas independentes (válido)", "Sinal"],
+      sk_rows, widths=[0.9, 1.9, 2.2, 1.4], size=8.8)
+
+p("Duas leituras se impõem. Primeiro, a armadilha estatística: em 10 e 42 dias, as janelas "
+  "sobrepostas produzem p-valores abaixo de 0,001 — aparentemente conclusivos. Com janelas "
+  "independentes, nenhum horizonte atinge significância. Se tivéssemos reportado apenas a primeira "
+  "coluna, teríamos anunciado uma descoberta inexistente.")
+
+p("Segundo, o resultado substantivo: não há evidência confiável em nenhuma direção. Os sinais "
+  "sequer são consistentes entre horizontes — positivo em 10 dias, nulo em 21, negativo em 42 —, "
+  "que é a assinatura típica de ruído. Com 18 a 75 janelas independentes, o poder estatístico é "
+  "baixo demais para detectar um efeito moderado.")
+
+callout(
+    "Status revisado da camada de credibilidade.",
+    "Sai de “refutada” para “testada na dimensão correta, sem evidência detectável nesta amostra”. "
+    "A distinção é relevante: não encontramos suporte para a hipótese, mas também não a "
+    "refutamos — o teste decisivo, sobre skew implícito, permanece inviável por falta de "
+    "histórico da superfície de volatilidade.",
+    cor=BLUE,
+)
+
+h2("6.4 Backtest de P&L e por que ele não deve ser levado a sério")
 
 callout(
     "Advertência necessária.",
@@ -1054,7 +1189,7 @@ p("A conclusão metodológica é que o Sharpe deste backtest não deve ser usado
   "modelos enquanto não houver IV histórica real. O R², medido contra o valor efetivamente "
   "realizado, é a única métrica confiável do projeto hoje.")
 
-h2("6.4 Por que R² e taxa de acerto podem discordar")
+h2("6.5 Por que R² e taxa de acerto podem discordar")
 
 p("Vale explicitar essa distinção, porque ela é fonte recorrente de leitura equivocada em "
   "estratégias quantitativas. As duas métricas são calculadas sobre conjuntos diferentes:")
@@ -1176,6 +1311,14 @@ bullets([
     ("O R² positivo que a fonte correta desfez. ", "O único resultado positivo do projeto vinha de "
      "uma fonte de preço com defeito estrutural. Ao usar o instrumento efetivamente negociado, ele "
      "desapareceu."),
+    ("O ranking de modelos que se inverteu. ", "Mais grave que o item anterior: o mesmo defeito de "
+     "dados fazia a persistência parecer superior ao HAR-RV em todos os horizontes. Na fonte "
+     "correta, o HAR-RV vence em cinco de seis. Um defeito silencioso não produz apenas um número "
+     "errado — ele reordena qual modelo parece melhor e redireciona a agenda de pesquisa."),
+    ("A significância que evaporou ao corrigir a sobreposição. ", "No teste de credibilidade "
+     "contra assimetria, janelas sobrepostas produziam p < 0,001. Com janelas independentes, nada "
+     "sobrevive. O mesmo dado, duas conclusões opostas, dependendo apenas de um cuidado "
+     "estatístico."),
 ])
 
 p("Se há uma lição transversal, é que a diferença entre um projeto quantitativo confiável e um "
@@ -1190,10 +1333,21 @@ bullets([
     ("Arquivar a superfície de IV diariamente. ", "Trivial de implementar e já deveria estar "
      "rodando: cada dia sem coletar é um dia de histórico perdido para sempre. É o único caminho "
      "para validar a tese central."),
-    ("Reformular o horizonte da estratégia. ", "O diagnóstico da Seção 5.6 aponta diretamente para "
+    ("Reformular o horizonte da estratégia. ", "O diagnóstico da Seção 5.7 aponta diretamente para "
      "isso. Se o sinal está em horizonte curto, a estratégia precisaria operar opções de prazo "
      "curto — o que esbarra na liquidez documentada na Seção 7.2. Avaliar essa tensão é a decisão "
      "estratégica mais importante do projeto."),
+])
+
+h3("Prioridade alta — corrigem conclusões contaminadas")
+
+bullets([
+    ("Refazer a ablação das seis camadas sobre o HAR-RV. ", "O experimento de correção de resíduo "
+     "usou a persistência como base, quando na fonte correta o HAR-RV é o melhor baseline. "
+     "Refazê-lo é necessário antes de considerar qualquer camada definitivamente descartada."),
+    ("Reexecutar todas as ablações na fonte da B3. ", "As ablações de notícia, credibilidade e "
+     "risco fiscal ainda rodam sobre o yfinance. Apenas a comparação central foi migrada — os "
+     "vereditos da Seção 6.2 herdam a fonte defeituosa e precisam ser reconfirmados."),
 ])
 
 h3("Prioridade média — melhoram a base")
@@ -1201,8 +1355,6 @@ h3("Prioridade média — melhoram a base")
 bullets([
     ("Refazer o teste de overnight com dados corretos. ", "A B3 fornece primeiro e último negócio "
      "do pregão, permitindo um teste legítimo de gap overnight pela primeira vez."),
-    ("Migrar o pipeline completo para a fonte da B3. ", "As ablações e o backtest ainda rodam "
-     "sobre a fonte antiga; a comparação central já foi migrada."),
     ("Modelar o prêmio de risco de forma variável. ", "A proxy de IV atual usa um multiplicador "
      "constante, que é a origem da colinearidade discutida em 6.3."),
 ])

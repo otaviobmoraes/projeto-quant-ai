@@ -93,6 +93,14 @@ CONFIGS_TESTED = [
     "curto prazo. R2 (pooled, medido contra o valor real) continua a "
     "metrica confiavel; Sharpe do backtest ilustrativo nao deveria ser "
     "usado pra escolher entre modelos ate haver IV real historica.",
+    "*** CORRECAO IMPORTANTE (descoberta na revisao final): a afirmacao "
+    "'persistencia bate o HAR-RV', repetida nos itens acima, era ARTEFATO DA "
+    "FONTE DEFEITUOSA. Na fonte correta (futuro da B3) o HAR-RV vence a "
+    "persistencia em 5 dos 6 horizontes (h=1,3,10,15,21); a persistencia so "
+    "vence em h=5. Na fonte yfinance ela vencia em 6 de 6. Consequencia: a "
+    "decisao de adotar persistencia como previsao oficial e o experimento de "
+    "correcao de residuo (item seguinte) foram construidos sobre a base "
+    "errada -- refazer sobre HAR-RV. ***",
     "Persistencia + CORRECAO DE RESIDUO (regressao no residuo target-"
     "persistencia, ver backtest.engine.generate_residual_corrected_forecast) "
     "-- testadas as 6 camadas ja avaliadas contra o HAR-RV (so rv_d/rv_w/rv_m, "
@@ -142,6 +150,21 @@ CONFIGS_TESTED = [
     "o HAR-RV para horizonte curto. DIAGNOSTICO: ha descasamento entre onde "
     "existe sinal (1 dia) e o horizonte que a estrategia precisa (21 dias, "
     "prazo da opcao) -- nao e falta de feature, e o horizonte.",
+    "CREDIBILIDADE testada na dimensao que a teoria PREVE (assimetria, nao "
+    "nivel): a ablacao anterior testou theta_t contra RV futura, um alvo de "
+    "NIVEL, mas Barro-Gordon preve efeito ASSIMETRICO (alargamento da cauda "
+    "direita/skew). O nulo anterior era evidencia fraca contra a teoria, nao "
+    "refutacao. O teste correto exigiria skew IMPLICITO -- inviavel, so ha 1 "
+    "dia de superficie de IV. Usada a contraparte realizada "
+    "(vol.realized.forward_realized_skewness). Direcao esperada: theta baixo "
+    "-> skew alta, ou seja correlacao NEGATIVA. Resultado com janelas "
+    "INDEPENDENTES (nao sobrepostas): h=10 r=+0.172 p=0.140; h=21 r=-0.002 "
+    "p=0.993; h=42 r=-0.150 p=0.552 -- nenhum significativo, e o sinal nem e "
+    "consistente entre horizontes. NOTA METODOLOGICA: com janelas SOBREPOSTAS "
+    "os MESMOS dados dariam p<0.001 em h=10 e h=42 -- p-valor inflado por "
+    "observacoes que compartilham quase todos os retornos. Status da camada: "
+    "de 'refutada' para 'testada na dimensao certa, sem evidencia detectavel "
+    "nesta amostra'.",
 ]
 
 

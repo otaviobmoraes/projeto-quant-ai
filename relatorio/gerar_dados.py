@@ -23,17 +23,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from backtest import engine
 from backtest.metrics import pooled_oos_metrics
 from backtest.walk_forward import purged_walk_forward_splits
 from data.b3_futures import PROCESSED_PATH as B3_PATH
 from data.fx_spot import PROCESSED_PATH as FX_PATH
+from credibility.credibility import PROCESSED_PATH as CREDIBILITY_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PATH
 from vol.forecast import BASELINE_FEATURES, build_dataset, persistence_forecast
 from vol.realized import (
     load_b3_futures_prices_and_variance,
     load_parkinson_prices_and_variance,
+    forward_realized_skewness,
     parkinson_daily_variance,
     parkinson_vol,
 )
@@ -239,6 +242,33 @@ def main():
     ax.set_title("Volatilidade realizada do USD/BRL — as duas fontes", color=INK, fontsize=12, loc="left")
     ax.legend(frameon=False, fontsize=9, labelcolor=SEC)
     _save(fig, "rv_historico.png")
+
+    print("7/7 credibilidade x assimetria (teste na dimensao que a teoria preve)...")
+    # A teoria de Barro-Gordon preve efeito no SKEW (cauda direita), nao no
+    # NIVEL de vol. Como nao ha historico de skew IMPLICITO (a B3 sobrescreve
+    # a superficie), usamos a contraparte REALIZADA.
+    ret_b3 = np.log(fut["settlement"]).diff()
+    ret_b3[fut["contract_changed"].values] = np.nan  # emenda de contrato nao e movimento real
+    cred = pd.read_parquet(CREDIBILITY_PATH).set_index("date").sort_index()
+
+    skew_res = {}
+    for h in (10, 21, 42):
+        sk = forward_realized_skewness(ret_b3, horizon=h)
+        df = pd.DataFrame({"skew": sk})
+        df["theta"] = cred["theta_baseline"].reindex(df.index, method="ffill")
+        df = df.dropna()
+        # Janelas de skew futura se SOBREPOEM: observacoes consecutivas
+        # compartilham quase todos os retornos, o que infla artificialmente a
+        # significancia. Reportamos as duas versoes; a independente e a valida.
+        ind = df.iloc[::h]
+        r_o, p_o = stats.pearsonr(df["theta"], df["skew"])
+        r_i, p_i = stats.pearsonr(ind["theta"], ind["skew"])
+        skew_res[str(h)] = {
+            "skew_media": float(df["skew"].mean()),
+            "n_sobrepostas": int(len(df)), "r_sobrepostas": float(r_o), "p_sobrepostas": float(p_o),
+            "n_independentes": int(len(ind)), "r_independentes": float(r_i), "p_independentes": float(p_i),
+        }
+    res["credibilidade_skew"] = skew_res
 
     (OUT_DIR / "resultados.json").write_text(
         json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8"

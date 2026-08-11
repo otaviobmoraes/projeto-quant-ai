@@ -205,6 +205,63 @@ def test_load_b3_futures_variance_is_scale_invariant(tmp_path, monkeypatch):
     pd.testing.assert_series_equal(variance, expected, check_names=False, check_freq=False)
 
 
+def test_forward_realized_skewness_uses_exactly_the_next_h_returns():
+    idx = pd.date_range("2024-01-01", periods=12, freq="B")
+    returns = pd.Series(np.arange(12, dtype=float), index=idx)
+
+    result = realized.forward_realized_skewness(returns, horizon=3)
+
+    # No indice t, a janela deve ser exatamente returns[t+1 .. t+3].
+    esperado_t0 = pd.Series([1.0, 2.0, 3.0]).skew()
+    assert result.iloc[0] == pytest.approx(esperado_t0)
+    esperado_t4 = pd.Series([5.0, 6.0, 7.0]).skew()
+    assert result.iloc[4] == pytest.approx(esperado_t4)
+
+
+def test_forward_realized_skewness_is_positive_for_right_tail():
+    idx = pd.date_range("2024-01-01", periods=40, freq="B")
+    # retornos pequenos com um salto grande POSITIVO adiante -> cauda direita
+    r = np.full(40, 0.001)
+    r[5:8] = [0.001, 0.05, 0.001]
+    returns = pd.Series(r, index=idx)
+
+    result = realized.forward_realized_skewness(returns, horizon=10)
+
+    # em t=0, a janela [1..10] contem o salto positivo -> assimetria a direita
+    assert result.iloc[0] > 1.0
+
+
+def test_forward_realized_skewness_has_no_lookahead_beyond_horizon():
+    idx = pd.date_range("2024-01-01", periods=60, freq="B")
+    rng = np.random.default_rng(3)
+    returns = pd.Series(rng.normal(0, 0.01, 60), index=idx)
+
+    completo = realized.forward_realized_skewness(returns, horizon=5)
+    # truncar a serie DEPOIS de t+5 nao pode alterar o valor em t
+    truncado = realized.forward_realized_skewness(returns.iloc[:30], horizon=5)
+
+    comum = completo.iloc[:24].dropna().index.intersection(truncado.dropna().index)
+    assert len(comum) > 0
+    pd.testing.assert_series_equal(
+        completo.loc[comum], truncado.loc[comum], check_names=False, check_freq=False
+    )
+
+
+def test_forward_realized_skewness_tolerates_roll_gaps():
+    """Rolagens sao mensais: com min_periods estrito, quase toda janela de 21
+    dias conteria um NaN e o alvo inteiro viraria vazio."""
+    idx = pd.date_range("2024-01-01", periods=120, freq="B")
+    rng = np.random.default_rng(7)
+    returns = pd.Series(rng.normal(0, 0.01, 120), index=idx)
+    returns.iloc[::21] = np.nan  # um "dia de rolagem" a cada 21 pregoes
+
+    tolerante = realized.forward_realized_skewness(returns, horizon=21)
+    estrito = realized.forward_realized_skewness(returns, horizon=21, min_periods=21)
+
+    assert tolerante.notna().sum() > 50
+    assert estrito.notna().sum() == 0  # confirma que o problema seria real
+
+
 def test_load_b3_futures_prices_and_variance_missing_file_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(realized, "B3_FUTURES_PROCESSED_PATH", tmp_path / "missing.parquet")
 

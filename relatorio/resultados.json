@@ -151,5 +151,34 @@
     "b3_min": 5.920224898104038,
     "yf_media": 11.338161931771525,
     "corr_rv21": 0.8044231737606964
+  },
+  "credibilidade_skew": {
+    "10": {
+      "skew_media": 0.12011474733902423,
+      "n_sobrepostas": 748,
+      "r_sobrepostas": 0.15780432279060927,
+      "p_sobrepostas": 1.451911619037086e-05,
+      "n_independentes": 75,
+      "r_independentes": 0.17187261208148383,
+      "p_independentes": 0.14035863200755222
+    },
+    "21": {
+      "skew_media": 0.1782099977670527,
+      "n_sobrepostas": 737,
+      "r_sobrepostas": 0.02393193281112851,
+      "p_sobrepostas": 0.5165399973217812,
+      "n_independentes": 36,
+      "r_independentes": -0.00160028948221051,
+      "p_independentes": 0.992609407493391
+    },
+    "42": {
+      "skew_media": 0.3316624807997448,
+      "n_sobrepostas": 716,
+      "r_sobrepostas": -0.22128328289684393,
+      "p_sobrepostas": 2.1620037636036268e-09,
+      "n_independentes": 18,
+      "r_independentes": -0.15006290774570796,
+      "p_independentes": 0.5522861858548638
+    }
   }
 }

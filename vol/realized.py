@@ -76,6 +76,43 @@ def load_parkinson_prices_and_variance() -> tuple[pd.Series, pd.Series]:
     return fx["close"], variance
 
 
+def forward_realized_skewness(
+    returns: pd.Series, horizon: int, min_periods: int | None = None
+) -> pd.Series:
+    """Assimetria (skewness) dos retornos nos `horizon` dias APOS cada data.
+
+    Contraparte REALIZADA do skew implicito. Motivacao (credibility/CLAUDE.md):
+    a teoria de Barro-Gordon preve que perda de credibilidade eleva
+    ASSIMETRICAMENTE o risco de depreciacao do real -- ou seja, deveria
+    alargar a cauda DIREITA da distribuicao de USD/BRL, nao apenas o nivel
+    de volatilidade. Testar theta_t contra RV futura (um alvo de NIVEL) nao
+    responde a essa previsao; testar contra assimetria futura, sim.
+
+    O teste ideal usaria skew IMPLICITO (da superficie de opcoes), mas a B3
+    sobrescreve a superficie diariamente e so ha 1 dia de historico -- ver
+    limitacoes no relatorio. Esta e a melhor aproximacao possivel com os
+    dados disponiveis.
+
+    Olha para frente por construcao (shift negativo): serve como ALVO
+    supervisionado, nunca como feature de entrada.
+
+    `min_periods`: quantos retornos validos a janela precisa ter. Importa
+    quando a serie tem buracos deliberados -- e o caso do futuro de dolar,
+    onde o retorno do dia de ROLAGEM e descartado (emenda entre contratos
+    diferentes nao e movimento de preco real). Como as rolagens sao MENSAIS,
+    praticamente toda janela de 21 dias contem uma; com o padrao do pandas
+    (min_periods = horizon) quase tudo viraria NaN. Default aqui: tolera ate
+    3 ausencias na janela.
+    """
+    if min_periods is None:
+        min_periods = max(3, horizon - 3)
+    # rolling ANTES do shift (mesma ordem de forward_target_from_variance):
+    # a ordem inversa (shift antes) daria a mesma janela, mas descartaria os
+    # primeiros horizon-1 valores sem necessidade.
+    fwd = returns.rolling(horizon, min_periods=min_periods).skew().shift(-horizon)
+    return fwd.rename("forward_skewness")
+
+
 def load_b3_futures_prices_and_variance() -> tuple[pd.Series, pd.Series]:
     """Le o futuro de dolar da B3 ja coletado (data/b3_futures.py) e devolve
     (preco de ajuste, variancia diaria de Parkinson).
