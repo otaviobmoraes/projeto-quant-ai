@@ -15,7 +15,6 @@ import pandas as pd
 from backtest.metrics import pooled_oos_metrics
 from backtest.walk_forward import purged_walk_forward_splits
 from data.gdelt_news import fiscal_risk_surprise, load_fiscal_risk_series
-from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 from vol.forecast import (
     BASELINE_FEATURES,
     NEWS_FEATURES,
@@ -115,22 +114,18 @@ def load_and_run_purged_ablation(
     query: str | None = None,
     log_target: bool = True,
     news_smooth_window: int | None = 21,
-    use_parkinson: bool = False,
+    source: str = "b3",
 ) -> dict:
-    """Le o PTAX e o tom do GDELT ja coletados (data/ptax.py, data/gdelt_news.py)
-    e roda a avaliacao final (walk-forward purgado) da ablacao.
+    """Le o tom do GDELT ja coletado e roda a avaliacao final (walk-forward
+    purgado) da ablacao.
 
-    `use_parkinson=True`: usa o estimador de Parkinson via fx_spot (OHLC) em
-    vez do proxy de retorno de fechamento do PTAX -- baseline preferencial
-    (RMSE menor em todos os folds testados no diagnostico do backtest).
+    `source`: fonte de preco -- ver vol.realized.load_prices_and_variance.
+    Padrao "b3" (futuro de dolar, instrumento sobre o qual a opcao e escrita).
     """
-    ptax_prices, news = load_prices_and_news(tipo, query)
-    if use_parkinson:
-        from vol.realized import load_parkinson_prices_and_variance
+    from vol.realized import load_prices_and_variance
 
-        prices, daily_variance = load_parkinson_prices_and_variance()
-    else:
-        prices, daily_variance = ptax_prices, None
+    _, news = load_prices_and_news(tipo, query)
+    prices, daily_variance = load_prices_and_variance(source, tipo)
 
     return run_purged_ablation(
         prices,
@@ -151,7 +146,7 @@ def load_and_run_fiscal_risk_ablation(
     tipo: str = "venda",
     log_target: bool = True,
     news_smooth_window: int | None = 21,
-    use_parkinson: bool = False,
+    source: str = "b3",
     folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
     use_surprise: bool = False,
     surprise_window: int = 63,
@@ -180,16 +175,9 @@ def load_and_run_fiscal_risk_ablation(
         if news_smooth_window == 21:  # default nao alterado explicitamente pelo chamador
             news_smooth_window = None
 
-    if use_parkinson:
-        from vol.realized import load_parkinson_prices_and_variance
+    from vol.realized import load_prices_and_variance
 
-        prices, daily_variance = load_parkinson_prices_and_variance()
-    else:
-        if not PTAX_PROCESSED_PATH.exists():
-            raise FileNotFoundError(f"{PTAX_PROCESSED_PATH} nao encontrado -- rode data.ptax primeiro.")
-        ptax_df = pd.read_parquet(PTAX_PROCESSED_PATH)
-        prices = ptax_df[ptax_df["tipo"] == tipo].set_index("date")["value"].sort_index()
-        daily_variance = None
+    prices, daily_variance = load_prices_and_variance(source, tipo)
 
     return run_purged_ablation(
         prices,
@@ -327,7 +315,7 @@ def load_and_run_fiscal_risk_ablation_v2(
     embargo_days: int = 5,
     tipo: str = "venda",
     log_target: bool = True,
-    use_parkinson: bool = False,
+    source: str = "b3",
     folds: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
     surprise_window: int = 63,
     sentiment_smooth_window: int | None = 5,
@@ -349,16 +337,9 @@ def load_and_run_fiscal_risk_ablation_v2(
     fiscal_sentiment_series = sentiment_df.set_index("date")["sentiment_mean"].sort_index()
     fiscal_surprise_series = fiscal_risk_surprise(load_fiscal_risk_series(), window=surprise_window)
 
-    if use_parkinson:
-        from vol.realized import load_parkinson_prices_and_variance
+    from vol.realized import load_prices_and_variance
 
-        prices, daily_variance = load_parkinson_prices_and_variance()
-    else:
-        if not PTAX_PROCESSED_PATH.exists():
-            raise FileNotFoundError(f"{PTAX_PROCESSED_PATH} nao encontrado -- rode data.ptax primeiro.")
-        ptax_df = pd.read_parquet(PTAX_PROCESSED_PATH)
-        prices = ptax_df[ptax_df["tipo"] == tipo].set_index("date")["value"].sort_index()
-        daily_variance = None
+    prices, daily_variance = load_prices_and_variance(source, tipo)
 
     return run_fiscal_risk_ablation_v2(
         prices,

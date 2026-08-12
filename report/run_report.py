@@ -243,7 +243,7 @@ def main() -> None:
 
     _print_header("1. Avaliacao final do modelo (walk-forward purgado, baseline Parkinson)")
     result = ablation.load_and_run_purged_ablation(
-        horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
+        horizon=21, n_splits=5, embargo_days=5, source="b3"
     )
     print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(result['baseline_pooled'])}")
     print(f"Com noticia:                   {summary.format_metrics(result['com_noticia_pooled'])}")
@@ -278,7 +278,7 @@ def main() -> None:
     _print_header("2b. Veredito -- credibilidade (Focus/meta, Tier 1)")
     try:
         cred_result = credibility_ablation.load_and_run_credibility_ablation(
-            horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
+            horizon=21, n_splits=5, embargo_days=5, source="b3"
         )
         print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(cred_result['baseline_pooled'])}")
         print(f"Com credibilidade:             {summary.format_metrics(cred_result['com_credibilidade_pooled'])}")
@@ -300,7 +300,7 @@ def main() -> None:
     if VOLUME_PROCESSED_PATH.exists():
         try:
             fiscal_result = ablation.load_and_run_fiscal_risk_ablation(
-                horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
+                horizon=21, n_splits=5, embargo_days=5, source="b3"
             )
             print(f"Baseline (HAR-RV, Parkinson):  {summary.format_metrics(fiscal_result['baseline_pooled'])}")
             print(f"Com risco fiscal:              {summary.format_metrics(fiscal_result['com_noticia_pooled'])}")
@@ -327,7 +327,7 @@ def main() -> None:
     if FISCAL_SENTIMENT_PROCESSED_PATH.exists():
         try:
             fiscal_v2_result = ablation.load_and_run_fiscal_risk_ablation_v2(
-                horizon=21, n_splits=5, embargo_days=5, use_parkinson=True
+                horizon=21, n_splits=5, embargo_days=5, source="b3"
             )
             print(f"Baseline (HAR-RV, Parkinson):     {summary.format_metrics(fiscal_v2_result['baseline_pooled'])}")
             print(f"Com risco fiscal refinado:        {summary.format_metrics(fiscal_v2_result['com_risco_fiscal_v2_pooled'])}")

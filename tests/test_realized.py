@@ -247,6 +247,36 @@ def test_forward_realized_skewness_has_no_lookahead_beyond_horizon():
     )
 
 
+def test_load_prices_and_variance_rejects_unknown_source():
+    with pytest.raises(ValueError, match="fonte desconhecida"):
+        realized.load_prices_and_variance(source="bloomberg")
+
+
+def test_load_prices_and_variance_ptax_returns_none_variance(tmp_path, monkeypatch):
+    idx = pd.date_range("2024-01-01", periods=10, tz="America/Sao_Paulo")
+    df = pd.DataFrame({"date": idx, "value": np.linspace(5.0, 5.2, 10), "tipo": "venda"})
+    path = tmp_path / "ptax.parquet"
+    df.to_parquet(path)
+    monkeypatch.setattr(realized, "PTAX_PROCESSED_PATH", path)
+
+    prices, variance = realized.load_prices_and_variance(source="ptax")
+
+    assert len(prices) == 10
+    assert variance is None  # sem OHLC: chamador cai no proxy de retorno^2
+
+
+def test_load_prices_and_variance_dispatches_to_b3(monkeypatch):
+    chamou = {}
+
+    def fake_b3():
+        chamou["b3"] = True
+        return pd.Series([1.0]), pd.Series([0.1])
+
+    monkeypatch.setattr(realized, "load_b3_futures_prices_and_variance", fake_b3)
+    realized.load_prices_and_variance(source="b3")
+    assert chamou.get("b3")
+
+
 def test_forward_realized_skewness_tolerates_roll_gaps():
     """Rolagens sao mensais: com min_periods estrito, quase toda janela de 21
     dias conteria um NaN e o alvo inteiro viraria vazio."""

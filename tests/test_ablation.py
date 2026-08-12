@@ -90,7 +90,9 @@ def test_load_and_run_purged_ablation_reads_processed_parquets(tmp_path, monkeyp
     monkeypatch.setattr(forecast_module, "PTAX_PROCESSED_PATH", ptax_path)
     monkeypatch.setattr(forecast_module, "TONE_PROCESSED_PATH", tone_path)
 
-    result = ablation.load_and_run_purged_ablation(horizon=21, n_splits=3, embargo_days=5, query="Brazil")
+    result = ablation.load_and_run_purged_ablation(
+        horizon=21, n_splits=3, embargo_days=5, query="Brazil", source="ptax"
+    )
 
     assert "baseline" in result and "com_noticia" in result
 
@@ -113,10 +115,13 @@ def test_load_and_run_fiscal_risk_ablation_reads_processed_parquets(tmp_path, mo
     volume_path = tmp_path / "gdelt_volume.parquet"
     volume_df.to_parquet(volume_path)
 
-    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    import vol.realized as realized_module
+    monkeypatch.setattr(realized_module, "PTAX_PROCESSED_PATH", ptax_path)
     monkeypatch.setattr(gdelt_news_module, "VOLUME_PROCESSED_PATH", volume_path)
 
-    result = ablation.load_and_run_fiscal_risk_ablation(horizon=21, n_splits=3, embargo_days=5)
+    result = ablation.load_and_run_fiscal_risk_ablation(
+        horizon=21, n_splits=3, embargo_days=5, source="ptax"
+    )
 
     assert "baseline" in result and "com_noticia" in result
 
@@ -139,17 +144,18 @@ def test_load_and_run_fiscal_risk_ablation_use_surprise_transforms_news(tmp_path
     volume_path = tmp_path / "gdelt_volume.parquet"
     volume_df.to_parquet(volume_path)
 
-    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    import vol.realized as realized_module
+    monkeypatch.setattr(realized_module, "PTAX_PROCESSED_PATH", ptax_path)
     monkeypatch.setattr(gdelt_news_module, "VOLUME_PROCESSED_PATH", volume_path)
 
     result = ablation.load_and_run_fiscal_risk_ablation(
-        horizon=21, n_splits=3, embargo_days=5, use_surprise=True, surprise_window=63
+        horizon=21, n_splits=3, embargo_days=5, use_surprise=True, surprise_window=63, source="ptax"
     )
 
     assert "baseline" in result and "com_noticia" in result
 
 
-def test_load_and_run_purged_ablation_use_parkinson_reads_fx_spot(tmp_path, monkeypatch):
+def test_load_and_run_purged_ablation_source_yfinance_reads_fx_spot(tmp_path, monkeypatch):
     prices = _price_series(400, seed=7)
     ptax_df = pd.DataFrame({"date": prices.index, "value": prices.to_numpy(), "tipo": "venda"})
     ptax_path = tmp_path / "ptax.parquet"
@@ -183,7 +189,7 @@ def test_load_and_run_purged_ablation_use_parkinson_reads_fx_spot(tmp_path, monk
     monkeypatch.setattr(realized_module, "FX_SPOT_PROCESSED_PATH", fx_path)
 
     result = ablation.load_and_run_purged_ablation(
-        horizon=21, n_splits=3, embargo_days=5, query="Brazil", use_parkinson=True
+        horizon=21, n_splits=3, embargo_days=5, query="Brazil", source="yfinance"
     )
 
     assert "baseline" in result and "com_noticia" in result
@@ -270,10 +276,13 @@ def test_load_and_run_fiscal_risk_ablation_v2_reads_processed_parquets(tmp_path,
     sentiment_path = tmp_path / "fiscal_sentiment_index.parquet"
     sentiment_df.to_parquet(sentiment_path)
 
-    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    import vol.realized as realized_module
+    monkeypatch.setattr(realized_module, "PTAX_PROCESSED_PATH", ptax_path)
     monkeypatch.setattr(gdelt_news_module, "VOLUME_PROCESSED_PATH", volume_path)
     monkeypatch.setattr(daily_index_module, "FISCAL_SENTIMENT_PROCESSED_PATH", sentiment_path)
 
-    result = ablation.load_and_run_fiscal_risk_ablation_v2(horizon=21, n_splits=3, embargo_days=5)
+    result = ablation.load_and_run_fiscal_risk_ablation_v2(
+        horizon=21, n_splits=3, embargo_days=5, source="ptax"
+    )
 
     assert "baseline" in result and "com_risco_fiscal_v2" in result

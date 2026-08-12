@@ -142,6 +142,44 @@ def load_b3_futures_prices_and_variance() -> tuple[pd.Series, pd.Series]:
     return fut["settlement"] / 1000.0, variance
 
 
+PRICE_SOURCES = ("ptax", "yfinance", "b3")
+
+
+def load_prices_and_variance(
+    source: str = "b3", tipo: str = "venda"
+) -> tuple[pd.Series, pd.Series | None]:
+    """Despachante unico de fonte de preco -> (precos, variancia diaria).
+
+    Existe para que as ablacoes (backtest/, credibility/) escolham a fonte
+    por um parametro, em vez de repetirem o mesmo if/else. Fontes:
+
+    - "b3"       : futuro de dolar da B3, variancia de Parkinson. PADRAO e
+                   fonte PREFERENCIAL -- e o instrumento sobre o qual a opcao
+                   e escrita, com preco oficial da bolsa e datas validadas
+                   contra o PTAX (ver data/b3_futures.py).
+    - "yfinance" : spot BRL=X, variancia de Parkinson. Mantida so para
+                   reproduzir resultados historicos do projeto; as barras
+                   tem abertura ~= fechamento e o `close` fica defasado 1 dia
+                   (o high/low, usado pelo Parkinson, esta correto).
+    - "ptax"     : PTAX do BCB, sem OHLC -- devolve variancia None, deixando
+                   o chamador cair no proxy de retorno de fechamento ao
+                   quadrado.
+    """
+    if source not in PRICE_SOURCES:
+        raise ValueError(f"fonte desconhecida: {source!r} -- use uma de {PRICE_SOURCES}")
+
+    if source == "b3":
+        return load_b3_futures_prices_and_variance()
+    if source == "yfinance":
+        return load_parkinson_prices_and_variance()
+
+    if not PTAX_PROCESSED_PATH.exists():
+        raise FileNotFoundError(f"{PTAX_PROCESSED_PATH} nao encontrado -- rode data.ptax primeiro.")
+    ptax_df = pd.read_parquet(PTAX_PROCESSED_PATH)
+    prices = ptax_df[ptax_df["tipo"] == tipo].set_index("date")["value"].sort_index()
+    return prices, None
+
+
 def load_ptax_realized_vol(window: int = 21, tipo: str = "venda") -> pd.DataFrame:
     """Le o parquet processado do PTAX (ja coletado por data.ptax.load_ptax_processed)
     e monta a serie de RV realizada de `window` dias uteis, anualizada.

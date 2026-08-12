@@ -83,15 +83,18 @@ def test_load_and_run_credibility_ablation_reads_processed_parquets(tmp_path, mo
     credibility_path = tmp_path / "credibility.parquet"
     credibility_df.to_parquet(credibility_path)
 
-    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", ptax_path)
+    import vol.realized as realized_module
+    monkeypatch.setattr(realized_module, "PTAX_PROCESSED_PATH", ptax_path)
     monkeypatch.setattr(ablation, "CREDIBILITY_PROCESSED_PATH", credibility_path)
 
-    result = ablation.load_and_run_credibility_ablation(horizon=21, n_splits=3, embargo_days=5)
+    result = ablation.load_and_run_credibility_ablation(
+        horizon=21, n_splits=3, embargo_days=5, source="ptax"
+    )
 
     assert "baseline" in result and "com_credibilidade" in result
 
 
-def test_load_and_run_credibility_ablation_use_parkinson_reads_fx_spot(tmp_path, monkeypatch):
+def test_load_and_run_credibility_ablation_source_yfinance_reads_fx_spot(tmp_path, monkeypatch):
     prices = _price_series(400, seed=6)
     credibility_df = _credibility_df(prices.index, theta=0.5, dispersion=0.4)
     credibility_path = tmp_path / "credibility.parquet"
@@ -117,15 +120,16 @@ def test_load_and_run_credibility_ablation_use_parkinson_reads_fx_spot(tmp_path,
     monkeypatch.setattr(realized_module, "FX_SPOT_PROCESSED_PATH", fx_path)
 
     result = ablation.load_and_run_credibility_ablation(
-        horizon=21, n_splits=3, embargo_days=5, use_parkinson=True
+        horizon=21, n_splits=3, embargo_days=5, source="yfinance"
     )
 
     assert "baseline" in result and "com_credibilidade" in result
 
 
 def test_load_and_run_credibility_ablation_missing_files_raise(tmp_path, monkeypatch):
-    monkeypatch.setattr(ablation, "PTAX_PROCESSED_PATH", tmp_path / "missing_ptax.parquet")
+    import vol.realized as realized_module
+    monkeypatch.setattr(realized_module, "PTAX_PROCESSED_PATH", tmp_path / "missing_ptax.parquet")
     monkeypatch.setattr(ablation, "CREDIBILITY_PROCESSED_PATH", tmp_path / "missing_cred.parquet")
 
     with pytest.raises(FileNotFoundError):
-        ablation.load_and_run_credibility_ablation()
+        ablation.load_and_run_credibility_ablation(source="ptax")

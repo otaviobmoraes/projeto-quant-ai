@@ -1,0 +1,82 @@
+{
+  "noticia_tom_gdelt": {
+    "yfinance": {
+      "baseline": -0.5101608406275904,
+      "camada": -0.5207560466885877,
+      "delta": -0.010595206060997286,
+      "melhora_em": 2,
+      "n_folds": 5
+    },
+    "b3": {
+      "baseline": -0.4125313366318033,
+      "camada": -0.36795154277709985,
+      "delta": 0.04457979385470345,
+      "melhora_em": 3,
+      "n_folds": 5
+    }
+  },
+  "credibilidade": {
+    "yfinance": {
+      "baseline": -0.5101608406275904,
+      "camada": -0.5900435202529422,
+      "delta": -0.07988267962535178,
+      "melhora_em": 2,
+      "n_folds": 5
+    },
+    "b3": {
+      "baseline": -0.4125313366318033,
+      "camada": -0.5174007462309871,
+      "delta": -0.10486940959918378,
+      "melhora_em": 3,
+      "n_folds": 5
+    }
+  },
+  "risco_fiscal_nivel": {
+    "yfinance": {
+      "baseline": -0.5101608406275904,
+      "camada": -0.4408753183409988,
+      "delta": 0.06928552228659157,
+      "melhora_em": 1,
+      "n_folds": 5
+    },
+    "b3": {
+      "baseline": -0.4125313366318033,
+      "camada": -0.6506113559630302,
+      "delta": -0.2380800193312269,
+      "melhora_em": 3,
+      "n_folds": 5
+    }
+  },
+  "risco_fiscal_surpresa": {
+    "yfinance": {
+      "baseline": -0.6210230783135671,
+      "camada": -0.6203533214046577,
+      "delta": 0.000669756908909358,
+      "melhora_em": 3,
+      "n_folds": 5
+    },
+    "b3": {
+      "baseline": -0.4765929756246037,
+      "camada": -0.46730334423676223,
+      "delta": 0.009289631387841446,
+      "melhora_em": 4,
+      "n_folds": 5
+    }
+  },
+  "risco_fiscal_v2_finbert": {
+    "yfinance": {
+      "baseline": -0.5648963881391211,
+      "camada": -1.1330495959031799,
+      "delta": -0.5681532077640588,
+      "melhora_em": 3,
+      "n_folds": 5
+    },
+    "b3": {
+      "baseline": -0.36402218271583564,
+      "camada": -1.0542669373316707,
+      "delta": -0.690244754615835,
+      "melhora_em": 1,
+      "n_folds": 5
+    }
+  }
+}

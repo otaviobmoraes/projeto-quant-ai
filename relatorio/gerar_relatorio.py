@@ -1091,21 +1091,88 @@ p(f"A volatilidade média do futuro no período foi de {num(rv['b3_media'], 2)}%
   "no nível de RV de 21 dias — próximas, mas não idênticas, o que já sinalizava que a escolha de "
   "fonte não era indiferente.")
 
-h2("6.2 Ablações: o veredito sobre cada camada")
+h2("6.2 Ablações: os vereditos definitivos, nas duas fontes")
 
-table(
-    ["Camada testada", "Formulação", "Resultado"],
-    [
-        ("Notícia (tom GDELT)", "Tom médio suavizado em 21 dias", "Não ajuda"),
-        ("Credibilidade do BC", "θₜ + dispersão do Focus", "Não ajuda; piora o R²"),
-        ("Risco fiscal — atenção", "% da cobertura sobre o tema", "Ganho aparente, mas inconsistente (1 de 5 folds)"),
-        ("Risco fiscal — surpresa", "z-score vs. média móvel", "Efeito dentro do ruído"),
-        ("Risco fiscal — sentimento", "FinBERT-PT-BR nas manchetes", "Inverteu ao completar os dados"),
-        ("Risco global exógeno", "VIX + DXY", "Não ajuda; VIX piora"),
-        ("Extensões de literatura", "Overnight, semivariância, ensemble", "Teste invalidado pelo erro de fonte"),
-    ],
-    widths=[1.9, 2.3, 2.4],
+p("Os vereditos originais do projeto foram obtidos sobre a fonte defeituosa. Reexecutamos todas as "
+  "ablações também na fonte correta. A tabela mostra o ganho de R² que cada camada produz sobre o "
+  "HAR-RV baseline, nos mesmos folds purgados, em cada fonte:")
+
+ABL = json.loads((BASE / "ablacoes_por_fonte.json").read_text(encoding="utf-8"))
+NOMES = {
+    "noticia_tom_gdelt": "Notícia — tom (GDELT)",
+    "credibilidade": "Credibilidade (θₜ + dispersão)",
+    "risco_fiscal_nivel": "Risco fiscal — atenção",
+    "risco_fiscal_surpresa": "Risco fiscal — surpresa",
+    "risco_fiscal_v2_finbert": "Risco fiscal — sentimento FinBERT",
+}
+abl_rows = []
+for chave, rotulo in NOMES.items():
+    y, b = ABL[chave]["yfinance"], ABL[chave]["b3"]
+    abl_rows.append((
+        rotulo,
+        f"{fmt(y['delta'])}  ({y['melhora_em']}/{y['n_folds']})",
+        f"{fmt(b['delta'])}  ({b['melhora_em']}/{b['n_folds']})",
+        "sim" if (y["delta"] > 0) != (b["delta"] > 0) else "não",
+    ))
+table(["Camada", "Δ R² — fonte defeituosa", "Δ R² — fonte correta", "Veredito mudou?"],
+      abl_rows, widths=[2.1, 1.7, 1.7, 1.1], size=8.8, highlight={0, 2})
+
+p("Entre parênteses, em quantos dos cinco folds a camada melhorou o R². Duas mudanças de veredito "
+  "merecem destaque, ambas nas linhas realçadas.", size=9, color=MUTED)
+
+h3("O que mudou")
+
+no_b3 = ABL["noticia_tom_gdelt"]["b3"]
+no_yf = ABL["noticia_tom_gdelt"]["yfinance"]
+rf_b3 = ABL["risco_fiscal_nivel"]["b3"]
+rf_yf = ABL["risco_fiscal_nivel"]["yfinance"]
+
+bullets([
+    ("Notícia (tom do GDELT) passou de negativa a positiva. ",
+     f"Na fonte defeituosa, Δ = {fmt(no_yf['delta'])} (melhora em {no_yf['melhora_em']} de "
+     f"{no_yf['n_folds']} folds). Na correta, Δ = {fmt(no_b3['delta'])} "
+     f"({no_b3['melhora_em']} de {no_b3['n_folds']}). É a única camada com ganho positivo na "
+     "fonte correta."),
+    ("Risco fiscal (atenção) passou de positiva a claramente negativa. ",
+     f"Era Δ = {fmt(rf_yf['delta'])} — o resultado que o relatório anterior descrevia como "
+     f"“ganho aparente, mas inconsistente”. Na fonte correta, Δ = {fmt(rf_b3['delta'])}. O ganho "
+     "aparente era artefato."),
+])
+
+h3("Por que não tratamos o resultado da notícia como descoberta")
+
+p("A tentação seria anunciar que o tom de notícia finalmente funciona. Não o faremos, por três "
+  "razões concretas — e a terceira é a que mais pesa.")
+
+bullets([
+    ("Magnitude pequena e R² ainda negativo. ",
+     f"O modelo com notícia atinge {fmt(no_b3['camada'])}: melhor que o baseline "
+     f"({fmt(no_b3['baseline'])}), mas ainda pior que simplesmente prever a média histórica."),
+    ("Consistência fraca. ",
+     f"Melhora em {no_b3['melhora_em']} de {no_b3['n_folds']} folds — dois folds pioram."),
+    ("Já vimos exatamente este padrão virar pó. ",
+     "A camada de risco fiscal com FinBERT apresentou Δ = +0,073 com melhora em 3 de 5 folds "
+     "quando tínhamos 12 das 15 janelas de dados. Ao completar a coleta, inverteu para −0,568. "
+     "A magnitude e a contagem de folds daquele falso positivo são praticamente idênticas às "
+     "deste resultado."),
+])
+
+callout(
+    "Critério que aplicamos a nós mesmos.",
+    "Com 25 configurações testadas, um ganho de R² desta magnitude é exatamente o que se espera "
+    "encontrar por acaso — é a razão de existir do Deflated Sharpe Ratio. Registramos o resultado "
+    "como a camada mais promissora entre as testadas, e como candidata a reavaliação com mais "
+    "dados. Não como evidência de que notícia prevê volatilidade.",
+    cor=BLUE,
 )
+
+h3("Sobre o experimento de correção de resíduo")
+
+p("A Seção 5.6 apontou que aquele experimento usou a persistência como base, quando na fonte "
+  "correta o HAR-RV é o melhor baseline. Ele não precisa ser refeito: adicionar as camadas ao "
+  "HAR-RV e ajustar tudo conjuntamente — que é exatamente o que a tabela acima faz — é a versão "
+  "mais flexível e mais padrão da mesma pergunta. A correção de resíduo era um contorno "
+  "necessário apenas porque a persistência não tem parâmetros aos quais somar variáveis.")
 
 p("Um teste adicional merece registro por ser o mais direto de todos. Depois de adotar a "
   "persistência como referência, testamos as seis camadas não como substitutas do modelo, mas como "
@@ -1339,15 +1406,12 @@ bullets([
      "estratégica mais importante do projeto."),
 ])
 
-h3("Prioridade alta — corrigem conclusões contaminadas")
+h3("Prioridade alta — o fio a puxar")
 
 bullets([
-    ("Refazer a ablação das seis camadas sobre o HAR-RV. ", "O experimento de correção de resíduo "
-     "usou a persistência como base, quando na fonte correta o HAR-RV é o melhor baseline. "
-     "Refazê-lo é necessário antes de considerar qualquer camada definitivamente descartada."),
-    ("Reexecutar todas as ablações na fonte da B3. ", "As ablações de notícia, credibilidade e "
-     "risco fiscal ainda rodam sobre o yfinance. Apenas a comparação central foi migrada — os "
-     "vereditos da Seção 6.2 herdam a fonte defeituosa e precisam ser reconfirmados."),
+    ("Reavaliar a camada de notícia com mais dados. ", "É a única com ganho positivo na fonte "
+     "correta (Seção 6.2), mas de magnitude indistinguível de ruído e com o mesmo perfil de um "
+     "falso positivo que já observamos. Mais período de amostra é o que decide."),
 ])
 
 h3("Prioridade média — melhoram a base")

@@ -20,7 +20,6 @@ import pandas as pd
 from backtest.metrics import pooled_oos_metrics
 from backtest.walk_forward import purged_walk_forward_splits
 from credibility.credibility import PROCESSED_PATH as CREDIBILITY_PROCESSED_PATH
-from data.ptax import PROCESSED_PATH as PTAX_PROCESSED_PATH
 from vol.forecast import (
     evaluate,
     fit_har,
@@ -120,14 +119,13 @@ def load_and_run_credibility_ablation(
     embargo_days: int = 5,
     tipo: str = "venda",
     log_target: bool = True,
-    use_parkinson: bool = False,
+    source: str = "b3",
 ) -> dict:
     """Le o PTAX e a credibilidade ja processados (data.ptax,
     credibility.credibility) e roda a ablacao.
 
-    `use_parkinson=True`: usa o estimador de Parkinson via fx_spot (OHLC) em
-    vez do proxy de retorno de fechamento do PTAX -- baseline preferencial
-    (RMSE menor em todos os folds testados no diagnostico do backtest).
+    `source`: fonte de preco -- ver vol.realized.load_prices_and_variance.
+    Padrao "b3" (futuro de dolar, instrumento sobre o qual a opcao e escrita).
     """
     if not CREDIBILITY_PROCESSED_PATH.exists():
         raise FileNotFoundError(
@@ -136,18 +134,9 @@ def load_and_run_credibility_ablation(
         )
     credibility_df = pd.read_parquet(CREDIBILITY_PROCESSED_PATH)
 
-    if use_parkinson:
-        from vol.realized import load_parkinson_prices_and_variance
+    from vol.realized import load_prices_and_variance
 
-        prices, daily_variance = load_parkinson_prices_and_variance()
-    else:
-        if not PTAX_PROCESSED_PATH.exists():
-            raise FileNotFoundError(
-                f"{PTAX_PROCESSED_PATH} nao encontrado -- rode data.ptax primeiro."
-            )
-        ptax_df = pd.read_parquet(PTAX_PROCESSED_PATH)
-        prices = ptax_df[ptax_df["tipo"] == tipo].set_index("date")["value"].sort_index()
-        daily_variance = None
+    prices, daily_variance = load_prices_and_variance(source, tipo)
 
     return run_credibility_ablation(
         prices,
