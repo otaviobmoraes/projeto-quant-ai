@@ -194,9 +194,21 @@ def yang_zhang_variance(
     if contract_changed is not None:
         log_on = log_on.mask(contract_changed.astype(bool))
 
-    var_on = log_on.rolling(window).var(ddof=1)
-    var_oc = log_oc.rolling(window).var(ddof=1)
-    var_rs = rogers_satchell_daily_variance(open_, high, low, close).rolling(window).mean()
+    # `min_periods` menor que a janela e ESSENCIAL, nao cosmetico: os dias de
+    # rolagem saem mascarados (o gap cruza vencimentos), e o rolling do pandas
+    # exigiria a janela inteira sem NaN. Com rolagem a cada ~20 pregoes, isso
+    # zeraria a serie inteira para window=22 -- o mesmo erro que quase eliminou
+    # o full_day_variance antes de ser testado. Num estimador de JANELA a
+    # resposta certa e diferente da usada la: um dia inobservavel reduz a
+    # amostra efetiva da janela, nao anula a estimativa. Exigimos 80% da janela.
+    min_obs = max(2, int(window * 0.8))
+    var_on = log_on.rolling(window, min_periods=min_obs).var(ddof=1)
+    var_oc = log_oc.rolling(window, min_periods=min_obs).var(ddof=1)
+    var_rs = (
+        rogers_satchell_daily_variance(open_, high, low, close)
+        .rolling(window, min_periods=min_obs)
+        .mean()
+    )
 
     k = 0.34 / (1.34 + (window + 1) / (window - 1))
     return (var_on + k * var_oc + (1 - k) * var_rs).rename("yang_zhang")

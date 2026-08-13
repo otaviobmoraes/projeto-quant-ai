@@ -123,10 +123,15 @@ class TestFullDay:
 
 class TestYangZhang:
     def test_e_estimador_de_JANELA(self):
+        """Precisa acumular observacoes antes do primeiro valor -- mas nao a
+        janela INTEIRA: `min_periods` e 80% dela, para tolerar os dias de
+        rolagem mascarados (ver test_rolagem_nao_zera_a_serie)."""
         d = _ohlc(200)
-        yz = yang_zhang_variance(d["open"], d["high"], d["low"], d["close"], window=21)
-        assert yz.iloc[:20].isna().all()  # precisa da janela cheia
-        assert yz.iloc[25:].notna().all()
+        window = 21
+        yz = yang_zhang_variance(d["open"], d["high"], d["low"], d["close"], window=window)
+        min_obs = max(2, int(window * 0.8))
+        assert yz.iloc[: min_obs - 1].isna().all()
+        assert yz.iloc[window:].notna().all()
 
     def test_positivo_e_em_escala_de_variancia(self):
         d = _ohlc(300)
@@ -138,6 +143,18 @@ class TestYangZhang:
         d = _ohlc(50)
         with pytest.raises(ValueError):
             yang_zhang_variance(d["open"], d["high"], d["low"], d["close"], window=1)
+
+    def test_rolagem_nao_zera_a_serie(self):
+        """Regressao: o rolling().var() do pandas exige a janela inteira sem
+        NaN. Como os dias de rolagem saem mascarados, sem `min_periods` a serie
+        inteira virava NaN para window=22 (rolagem a cada ~20 pregoes) -- o
+        estimador seria descartado sem nunca ter sido avaliado."""
+        d = _ohlc(300)
+        changed = pd.Series(False, index=d.index)
+        changed.iloc[::20] = True
+        yz = yang_zhang_variance(d["open"], d["high"], d["low"], d["close"], 22, changed)
+        cobertura = yz.iloc[30:].notna().mean()
+        assert cobertura > 0.95, f"cobertura de apenas {cobertura:.1%} apos rolagens"
 
 
 class TestDespachante:

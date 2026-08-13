@@ -431,6 +431,30 @@ CONFIGS_TESTED = [
     "NAO e consistente entre subperiodos. 2/5 e o resultado mediano esperado "
     "por acaso, ou seja o teste de folds com apenas 5 comparacoes nao rejeita "
     "nem confirma. O criterio NAO foi afrouxado depois de ver o resultado.",
+    "YANG-ZHANG (2000) AVALIADO -- nao entra no despachante `ESTIMATORS` "
+    "porque e estimador de JANELA, nao por dia, entao nao substitui o `rv_d` "
+    "do HAR. O lugar certo dele sao os componentes SEMANAL e MENSAL, que ja "
+    "sao medidas de janela: testado com rv_d = Rogers-Satchell (identico nos "
+    "dois lados) e rv_w/rv_m vindos de YZ(5)/YZ(22) contra media movel de RS. "
+    "Alvo arbitro close-to-close, mesmos folds. "
+    "RESULTADO: PIOR em todos os horizontes -- h=1 -0.0622 vs -0.0484; "
+    "h=5 0.2219 vs 0.2536; h=21 0.2797 vs 0.2964. Deltas -0.0138, -0.0317, "
+    "-0.0167, com 2/5, 1/5 e 1/5 folds. Em h=5 e SIGNIFICATIVAMENTE pior "
+    "(DM t=-2.113, p=0.0353). "
+    "EXPLICACAO: apesar da eficiencia teorica ~14x, o YZ estima a VARIANCIA "
+    "DOS RETORNOS DENTRO da janela -- subtraindo a media deles. Os componentes "
+    "do HAR querem outra coisa: o NIVEL MEDIO da variancia diaria no periodo, "
+    "e a media movel de um estimador por dia e o estimador direto disso. "
+    "Efeito colateral relevante para cambio: ao remover a media do gap "
+    "overnight, o YZ descarta o componente sistematico de CARRY, que no "
+    "USD/BRL e grande dado o diferencial de juros. Correto para medir "
+    "volatilidade, mas muda o objeto medido. "
+    "BUG CORRIGIDO: sem `min_periods` no rolling, os dias de rolagem "
+    "mascarados zeravam a serie inteira para window=22 -- o mesmo erro que "
+    "quase eliminou o full_day, e que eu havia corrigido la mas nao aqui. "
+    "Num estimador de janela a resposta certa e diferente: um dia "
+    "inobservavel REDUZ a amostra efetiva (exigimos 80% da janela), nao "
+    "anula a estimativa.",
 ]
 
 
