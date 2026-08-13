@@ -43,15 +43,27 @@ tests/       # pytest por módulo
 
 ## Fontes de dados (todas gratuitas)
 
-- **Câmbio/PTAX:** API SGS do Banco Central (série PTAX) — oficial e estável. Localizar o código da série.
-- **Futuro de dólar (DOL/WDO):** market data público da B3; `yfinance` (`BRL=X`) como apoio.
-- **Superfície de IV de dólar:** publicada pela B3 (preços referenciais, pool de informantes às 18h). Baseline pronto.
-- **IV própria (diferencial):** boletins diários da B3 (arquivo **BD_Arbit**) → preços de ajuste das opções →
-  **inverter via Black-76** (numérico). Fazer como diferencial de rigor, além do baseline pronto.
-- **Notícias (global):** GDELT (API gratuita) — milhares de manchetes, já traz score de tom.
+- **Futuro de dólar (DOL) — FONTE OFICIAL DE PREÇO:** arquivos BVBG-086 da B3 (`data/b3_futures.py`),
+  2.135 pregões de 2018-01 a 2026-08. É o instrumento sobre o qual a opção é escrita.
+- **NÃO usar `yfinance` para USD/BRL.** O `close` de `BRL=X` é snapshot no limite do dia (correlação
+  0,99998 com a abertura), não fechamento de pregão — o retorno sai defasado 1 dia. Validado contra o
+  PTAX. Só `high`/`low` é confiável (usado pelo Parkinson). Vale só para VIX/DXY.
+- **Câmbio/PTAX:** API SGS do Banco Central — usado como árbitro independente de validação.
+- **Superfície de IV de dólar:** publicada pela B3, sobrescrita diariamente. **Só existe 1 snapshot
+  arquivado (2026-07-21) + 1 recuperado do Internet Archive (2026-04-29).** Arquivar diariamente é
+  ganho puro e barato; cada dia sem coletar é perdido para sempre.
+- **IV própria (implementado):** `data/b3_options.py` + `vol/black76.implied_vol`.
+  **ATENÇÃO — o caminho originalmente previsto está FECHADO:** a B3 publica preço de ajuste (`AdjstdQt`)
+  para **zero** das milhares de séries de opção de dólar, verificado em 2019, 2022 e 2026. Não é mudança
+  recente, é estrutural. O caminho que funciona é inverter Black-76 sobre o **preço negociado** —
+  7.346 negócios em 244 pregões (2018-2023), validado contra a superfície oficial dentro de 0,25-0,78 p.p.
+  A liquidez caiu 15× no período (45 séries negociadas/dia em 2019 → 3 em 2026).
+- **Notícias (global):** GDELT (API gratuita) — cobertura de 2023-07 a 2026-07.
 - **Notícias (BR):** atas/comunicados do COPOM e BCB; RSS de veículos financeiros.
 - **Bloomberg:** NÃO fazer scraping (viola ToS). Usar apenas export do terminal, quando disponível na
   competição, como enriquecimento/validação — nunca como dependência central.
+- **Lead não explorado:** a CME lista opção de real (contrato 6L) e publica ajuste para todas as séries,
+  inclusive as que não negociam — seria IV de série longa, sem a limitação da B3.
 
 ## Conceitos de domínio
 
@@ -92,11 +104,44 @@ tests/       # pytest por módulo
 
 Não construir tudo de uma vez. Validar módulo a módulo.
 
-## Comandos (preencher conforme o repo evolui)
+## Estado dos achados (ler antes de propor experimento novo)
+
+- **Diagnóstico central: descasamento de horizonte.** Previsibilidade existe em h=1 e decai até
+  desaparecer em h=21, o prazo de que a estratégia precisa. Autocorrelação da variância em lag 21:
+  0,025 no futuro da B3. Não é falta de feature.
+- **Único resultado positivo:** HAR-RV puro em h=1 bate a persistência com R² absoluto positivo em
+  2021-2022 (4/5 folds) e 2023-2026 (5/5 folds). Diebold-Mariano p=0,17 e p=0,11 — **sugestivo, não
+  estabelecido**. Nenhuma camada de informação melhora isso.
+- **Todas as camadas falharam**, testadas em h=21 **e** reavaliadas em h=1 e h=5: notícia (GDELT),
+  risco fiscal, FinBERT, credibilidade (Barro-Gordon), risco global, correção de rolagem.
+- **XGBoost perde do HAR em todo horizonte ≥ 3**, com a distância crescendo conforme as observações
+  independentes caem. Desenho e referências em `vol/ml_forecast.py`.
+- **Consultar `report/run_report.py:CONFIGS_TESTED` (31 registros) antes de propor qualquer teste** —
+  cada entrada traz veredito, magnitude, consistência entre folds e as ressalvas.
+
+### Armadilhas já encontradas (todas custaram um resultado falso)
+
+1. **Dados parciais** — concluir antes de a coleta terminar inverteu um veredito.
+2. **Janelas sobrepostas** — inflam p-valor; sempre reportar a versão independente.
+3. **Seleção pós-hoc** — janela/configuração escolhida depois de ver o resultado. Testar a vizinhança.
+4. **R² entre amostras diferentes** — `ss_tot` cresce com a heterogeneidade da janela; comparação
+   entre modelos exige **período de teste idêntico**.
+5. **Agregação criando padrão** — monotonia na amostra completa que não existe em nenhum fold.
+6. **Escala em modelo de gradiente** — `gblinear` com features de ordem 1e-5 sai subajustado e dá R²
+   negativo; parece resultado, é artefato. Padronizar (ajustando o scaler só no treino).
+
+### Critério de três portões (aplicar a qualquer camada nova)
+
+Δ R² > 0 **e** ≥4/5 folds melhorando **e** Diebold-Mariano p < 0,05 em janelas **independentes**.
+Abaixo disso: "não estabelecido". Declarar o critério **antes** de rodar.
+
+## Comandos
 
 - Setup: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
-- Testes: `pytest -q`
-- (adicionar lint/run conforme surgirem)
+- Testes: `pytest -q` (372 testes)
+- Lint: `python -m ruff check .`
+- Veredito: `python -m report.run_report`
+- Relatório: `python -m relatorio.gerar_dados && python -m relatorio.gerar_relatorio`
 
 ## Datas do desafio
 
