@@ -6,6 +6,7 @@ statsmodels
 arch
 scikit-learn
 lightgbm
+xgboost
 pyarrow
 openpyxl
 matplotlib
