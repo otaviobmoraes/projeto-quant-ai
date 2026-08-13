@@ -76,6 +76,181 @@ def load_parkinson_prices_and_variance() -> tuple[pd.Series, pd.Series]:
     return fx["close"], variance
 
 
+def garman_klass_daily_variance(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
+) -> pd.Series:
+    """Variancia diaria por Garman & Klass (1980):
+
+        RV_d = 0,5 * ln(H/L)^2 - (2*ln2 - 1) * ln(C/O)^2
+
+    Usa o OHLC COMPLETO, contra apenas high/low do Parkinson. Eficiencia
+    ~7,4x a do estimador close-to-close, contra ~5,2x do Parkinson -- ou seja,
+    para a mesma amostra o erro de medicao e menor.
+
+    Assume drift zero, como o Parkinson. Se o ativo tem tendencia (o real tem),
+    o termo de drift contamina -- e por isso que Rogers-Satchell existe.
+    """
+    hl = np.log(high / low) ** 2
+    co = np.log(close / open_) ** 2
+    return (0.5 * hl - (2 * np.log(2) - 1) * co).rename("gk")
+
+
+def rogers_satchell_daily_variance(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
+) -> pd.Series:
+    """Variancia diaria por Rogers & Satchell (1991):
+
+        RV_d = ln(H/C)*ln(H/O) + ln(L/C)*ln(L/O)
+
+    A propriedade que importa aqui: e NAO-VIESADO NA PRESENCA DE DRIFT.
+    Parkinson e Garman-Klass assumem drift zero e superestimam a variancia
+    quando o preco tem tendencia -- o que e exatamente o caso do USD/BRL no
+    periodo da amostra (settlement vai de ~3.150 a ~6.220).
+    """
+    hc, ho = np.log(high / close), np.log(high / open_)
+    lc, lo = np.log(low / close), np.log(low / open_)
+    return (hc * ho + lc * lo).rename("rs")
+
+
+def overnight_variance(
+    open_: pd.Series, prev_close: pd.Series, contract_changed: pd.Series | None = None
+) -> pd.Series:
+    """Variancia do gap overnight: ln(O_t / C_{t-1})^2.
+
+    `contract_changed`: dias em que a serie TROCOU de contrato (rolagem). Nesses
+    dias o gap cruza vencimentos diferentes -- e diferenca de preco entre
+    contratos, nao evento de volatilidade -- e o valor sai NaN. Sem essa mascara
+    o termo fica contaminado: medido na amostra da B3, o gap medio em dia de
+    rolagem e 1,5x o de um dia normal, em 103 dos 2.135 pregoes.
+
+    Estimadores intradiarios (Parkinson, GK, RS) captam SO o range do pregao; o
+    gap entre o fechamento de ontem e a abertura de hoje fica de fora de todos
+    eles. Em cambio isso nao e residual: boa parte da informacao chega com o
+    mercado fechado.
+    """
+    var = (np.log(open_ / prev_close) ** 2).rename("overnight")
+    if contract_changed is not None:
+        var = var.mask(contract_changed.astype(bool))
+    return var
+
+
+def full_day_variance(
+    open_: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    contract_changed: pd.Series | None = None,
+) -> pd.Series:
+    """Variancia de 24 HORAS: gap overnight + range intradiario (Rogers-Satchell).
+
+    Nao e o estimador de Yang-Zhang (esse e definido sobre uma JANELA -- ver
+    `yang_zhang_variance`), e sim a decomposicao por dia que a mesma logica
+    sugere: a variancia total do dia e o que aconteceu com o mercado fechado
+    mais o que aconteceu com ele aberto. Rogers-Satchell na parte intradiaria
+    porque e a unica das tres que tolera drift.
+
+    DIA DE ROLAGEM: o gap overnight e INOBSERVAVEL para um contrato consistente
+    (o fechamento de ontem e de outro vencimento), entao a parte overnight vai a
+    ZERO e o dia fica com o valor intradiario apenas -- subestimado, mas usavel.
+
+    Por que zero e nao NaN: `har_features_from_variance` usa rolling(5) e
+    rolling(22), e o rolling do pandas exige a janela inteira sem NaN. Com
+    rolagem a cada ~20 pregoes, um unico NaN por rolagem faz `rv_m` virar NaN em
+    QUASE TODA a serie -- o estimador seria eliminado antes de ser testado.
+    Zerar afeta 103 de 2.135 dias (4,8%) e so na componente overnight.
+    """
+    intraday = rogers_satchell_daily_variance(open_, high, low, close)
+    overnight = overnight_variance(open_, close.shift(1), contract_changed).fillna(0.0)
+    return (overnight + intraday).rename("full_day")
+
+
+def yang_zhang_variance(
+    open_: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    window: int = 21,
+    contract_changed: pd.Series | None = None,
+) -> pd.Series:
+    """Estimador de Yang & Zhang (2000), na forma NATIVA dele -- que e sobre
+    uma JANELA de `window` pregoes, nao por dia:
+
+        sigma^2 = sigma_overnight^2 + k*sigma_open_to_close^2 + (1-k)*sigma_RS^2
+        k = 0,34 / (1,34 + (n+1)/(n-1))
+
+    E o mais eficiente dos quatro (~14x o close-to-close) e o unico que trata
+    drift E gap overnight ao mesmo tempo. O preco e ser um estimador de janela:
+    devolve a variancia MEDIA do periodo, nao a "instantanea" do dia, entao nao
+    e substituto direto do Parkinson no pipeline HAR -- entra onde se quer uma
+    medida de nivel de vol sobre uma janela.
+
+    Ver `full_day_variance` para a versao por dia, que serve de drop-in.
+    """
+    if window < 2:
+        raise ValueError("window precisa ser >= 2 para o fator k de Yang-Zhang")
+
+    log_oc = np.log(close / open_)                                    # aberto->fechado
+    log_on = np.log(open_ / close.shift(1))                           # gap overnight
+    if contract_changed is not None:
+        log_on = log_on.mask(contract_changed.astype(bool))
+
+    var_on = log_on.rolling(window).var(ddof=1)
+    var_oc = log_oc.rolling(window).var(ddof=1)
+    var_rs = rogers_satchell_daily_variance(open_, high, low, close).rolling(window).mean()
+
+    k = 0.34 / (1.34 + (window + 1) / (window - 1))
+    return (var_on + k * var_oc + (1 - k) * var_rs).rename("yang_zhang")
+
+
+ESTIMATORS = ("parkinson", "garman_klass", "rogers_satchell", "full_day", "close_to_close")
+
+
+def load_b3_variance(
+    estimator: str = "parkinson", close_col: str = "settlement"
+) -> tuple[pd.Series, pd.Series]:
+    """Le o futuro da B3 ja coletado e devolve (precos de ajuste, variancia
+    diaria) para o estimador pedido -- despachante que permite as ablacoes
+    trocarem de estimador por um parametro.
+
+    `close_col`: "settlement" (preco de ajuste oficial, padrao e coerente com o
+    resto do projeto) ou "last" (ultimo negocio do pregao). Os estimadores
+    supoem o fechamento do processo de preco; o ajuste e menos ruidoso que um
+    unico ultimo negocio, mas mistura uma referencia oficial com precos
+    negociados no mesmo termo -- por isso os dois sao expostos e comparaveis.
+    """
+    from data.b3_futures import PROCESSED_PATH
+
+    if estimator not in ESTIMATORS:
+        raise ValueError(
+            f"estimador desconhecido: {estimator!r}. Use um de {ESTIMATORS}"
+        )
+    if not PROCESSED_PATH.exists():
+        raise FileNotFoundError(
+            f"{PROCESSED_PATH} nao encontrado -- rode data.b3_futures primeiro."
+        )
+
+    fut = pd.read_parquet(PROCESSED_PATH).sort_values("date").reset_index(drop=True)
+    idx = pd.DatetimeIndex(fut["date"])
+    o, h, low_, c = (
+        pd.Series(fut[col].to_numpy(), index=idx) for col in ("open", "high", "low", close_col)
+    )
+    changed = pd.Series(fut["contract_changed"].to_numpy(), index=idx)
+    prices = pd.Series(fut["settlement"].to_numpy(), index=idx, name="settlement")
+
+    if estimator == "parkinson":
+        var = parkinson_daily_variance(h, low_)
+    elif estimator == "garman_klass":
+        var = garman_klass_daily_variance(o, h, low_, c)
+    elif estimator == "rogers_satchell":
+        var = rogers_satchell_daily_variance(o, h, low_, c)
+    elif estimator == "full_day":
+        var = full_day_variance(o, h, low_, c, changed)
+    else:  # close_to_close
+        var = (log_returns(c) ** 2).rename("close_to_close")
+
+    return prices, var.rename(estimator)
+
+
 def forward_realized_skewness(
     returns: pd.Series, horizon: int, min_periods: int | None = None
 ) -> pd.Series:
