@@ -252,7 +252,7 @@ p("A aposta diferencial do projeto era que fluxo de notícias e um índice de cr
   "deste relatório é um resultado negativo bem estabelecido — que consideramos mais valioso, e "
   "certamente mais honesto, do que um número de backtest favorável obtido sem escrutínio.")
 
-h2("Os quatro achados que estruturam este relatório")
+h2("Os achados que estruturam este relatório")
 
 b3_21 = R["horizonte"]["b3"]["21"]
 yf_21 = R["horizonte"]["yfinance"]["21"]
@@ -277,6 +277,16 @@ bullets([
      f"(HAR-RV R² = {fmt(b3_1['har_r2'])}), que decai monotonicamente até ficar francamente "
      f"negativa em 21 dias — o prazo de que a estratégia precisa. Nenhuma feature adicional "
      "resolve isso; é uma propriedade do processo de volatilidade neste período."),
+    ("O diagnóstico ficou sem hipótese alternativa. ",
+     "Depois da primeira versão deste relatório, testamos as quatro explicações concorrentes: "
+     "forma funcional (gradient boosting e GARCH), features (todas as camadas reavaliadas também "
+     "em horizonte curto), tamanho de amostra (estendida para 2.135 pregões) e erro de medição "
+     "(cinco estimadores de variância). Nenhuma delas resgata o horizonte de 21 dias. As Seções "
+     "6.6 a 6.12 documentam cada uma."),
+    ("Construímos volatilidade implícita própria, que era dada como inviável. ",
+     "Invertendo Black-76 sobre preços efetivamente negociados de opção — e não sobre preços de "
+     "ajuste, que a B3 simplesmente não publica para esse mercado. A série permitiu medir pela "
+     "primeira vez o prêmio de risco de variância e rodar o backtest com implícita real."),
 ])
 
 callout(
@@ -1259,6 +1269,36 @@ p("A conclusão metodológica é que o Sharpe deste backtest não deve ser usado
   "modelos enquanto não houver IV histórica real. O R², medido contra o valor efetivamente "
   "realizado, é a única métrica confiável do projeto hoje.")
 
+BT = R.get("backtest_iv_real", {})
+if BT.get("disponivel") and BT.get("iv_real", {}).get("trades"):
+    _r, _p = BT["iv_real"], BT.get("iv_proxy", {})
+    h3("Reexecução com volatilidade implícita real")
+    p("A série reconstruída na Seção 6.7 permitiu rodar este backtest com implícita real pela "
+      f"primeira vez. A sobreposição entre previsão fora da amostra e IV disponível é de apenas "
+      f"{BT['sobreposicao_dias']} pregões, o que limita a simulação a {_r['trades']} operações — "
+      "amostra pequena demais para conclusão sobre lucratividade. O que ela mostra é outra coisa, "
+      "e é relevante.")
+    table(["Métrica", "IV real (negócios)", "IV proxy (RV × 1,29)"],
+          [("Operações", num(_r["trades"], 0), num(_p.get("trades", 0), 0)),
+           ("Compra / venda de vol", f"{_r['long']} / {_r['short']}",
+            f"{_p.get('long', 0)} / {_p.get('short', 0)}"),
+           ("P&L bruto, sem custos", num(_r["pnl_bruto_sem_custo"], 0),
+            num(_p.get("pnl_bruto_sem_custo", 0), 0)),
+           ("P&L líquido", num(_r["pnl_liquido"], 0), num(_p.get("pnl_liquido", 0), 0)),
+           ("Sharpe", fmt(_r["sharpe"]), fmt(_p.get("sharpe", 0)))],
+          widths=[2.2, 1.9, 2.0], highlight={1, 2})
+    p("O ganho é qualitativo e confirma o diagnóstico da colinearidade: com implícita real o sinal "
+      f"é BILATERAL ({_r['long']} compras e {_r['short']} vendas de volatilidade), enquanto com a "
+      f"proxy ele é degenerado — {_p.get('short', 0)} vendas e nenhuma compra. A proxy nunca "
+      "poderia gerar sinal de compra, porque é a própria RV multiplicada por uma constante maior "
+      "que um.")
+    callout("O que a decomposição de custos revela.",
+            "A estratégia perde ANTES dos custos: o P&L bruto com spread zerado já é negativo. "
+            "A hipótese de que o prêmio medido de 1,079 seria insuficiente para cobrir os 5% de "
+            "custo estava errada — os custos agravam, mas não explicam. O sinal erra o lado, o "
+            "que é coerente com uma previsão de R² negativo sendo comparada contra uma "
+            "implícita informativa.", cor=RED)
+
 h2("6.5 Por que R² e taxa de acerto podem discordar")
 
 p("Vale explicitar essa distinção, porque ela é fonte recorrente de leitura equivocada em "
@@ -1421,6 +1461,108 @@ callout("O que esta investigação fecha.",
         "subperíodo. Isso elimina o ruído de medição como explicação para o fracasso no "
         "horizonte da estratégia. Somado aos testes de modelo, de features e de amostra, o "
         "diagnóstico de descasamento de horizonte fica sem hipótese alternativa viva.", cor=RED)
+
+h2("6.10 O resultado positivo: previsibilidade em horizonte de um dia")
+
+H1 = R["h1_positivo"]
+p("Este é o único resultado positivo do projeto, e vale explicar por que ele é mais confiável "
+  "que qualquer outro número aqui: em horizonte de um dia o alvo NÃO se sobrepõe entre "
+  "observações consecutivas. Cada ponto é independente, o que torna o teste de Diebold-Mariano "
+  "legítimo e dispensa a correção por janelas sobrepostas que enfraquece os demais testes.")
+
+table(["Janela", "n", "HAR-RV", "Persistência", "Folds", "DM (p)"],
+      [(k, num(v["n"], 0), fmt(v["har_r2"]), fmt(v["persist_r2"]),
+        f"{v['folds_har_melhor']}/{v['n_folds']}", num(v["dm_p"], 4))
+       for k, v in H1.items()],
+      widths=[1.5, 0.8, 1.2, 1.4, 0.9, 1.0], highlight={1, 2})
+
+p("Em 2021-2022 e em 2023-2026 — dois períodos independentes — o HAR-RV bate a persistência com "
+  "R² positivo em termos absolutos, ou seja, superando a média incondicional, com apoio de 4 e 5 "
+  "folds de 5. É exatamente o que Corsi (2009) desenhou o modelo para fazer: capturar "
+  "volatilidade de curto prazo a partir de componentes de múltiplas escalas.")
+
+p("O período 2018-2019 vai na direção contrária e está na tabela por isso — rodamos todos os "
+  "subperíodos e reportamos todos, não apenas os favoráveis.")
+
+callout("Força exata desta evidência.",
+        "Nenhuma janela pré-registrada atinge significância a 5%: os valores de p ficam em 0,11 "
+        "e 0,17. A janela 2021-2026 agregada daria p = 0,0017, mas foi escolhida depois de "
+        "observar quais subperíodos funcionavam — seleção pós-hoc, e por isso não a utilizamos. "
+        "A leitura correta é: direção consistente e replicada, magnitude modesta, evidência "
+        "SUGESTIVA e não estabelecida.", cor=AMBER)
+
+h2("6.11 Combinação de previsões, e o quinto falso positivo")
+
+CB = R["combinacao"]
+p("A literatura de combinação de previsões (Bates & Granger, 1969; Timmermann, 2006) sustenta "
+  "que a média de previsões razoáveis costuma superar a melhor individual, e que pesos iguais "
+  "batem pesos estimados — estimar pesos adiciona variância. Antes de testar, medimos a "
+  "correlação entre os erros dos modelos, porque combinar só ajuda se eles errarem de formas "
+  "diferentes: HAR e persistência ficam em 0,754, enquanto variantes do mesmo HAR ficam acima de "
+  "0,94. Isso explica retroativamente por que o ensemble testado antes não extraiu nada.")
+
+table(["Janela", "HAR-RV", "Persistência", "Combinado", "Δ vs melhor", "DM (p)"],
+      [(k, fmt(v["21"]["har"]), fmt(v["21"]["persist"]), fmt(v["21"]["combinado"]),
+        fmt(v["21"]["delta"]), num(v["21"]["dm_p"], 4))
+       for k, v in CB.items() if "21" in v],
+      widths=[1.4, 1.1, 1.3, 1.2, 1.2, 0.9], highlight={3})
+
+p("Na amostra completa a combinação supera ambos os individuais em todos os horizontes, com "
+  "ganho substancial em 21 dias. Parecia o melhor achado do projeto, e o mecanismo é plausível: "
+  "combinar com a persistência equivale a encolher a previsão do HAR em direção a um benchmark "
+  "sem parâmetros, reduzindo variância de estimação.")
+
+callout("Por que não o reportamos como achado.",
+        "Por subperíodo o efeito desaparece: em 21 dias a combinação ajuda em um período e "
+        "prejudica em dois. Foi o quinto caso nesta fase em que uma estatística calculada sobre "
+        "a amostra agrupada produziu um resultado que a análise por subperíodo desfez — junto "
+        "com a extensão de amostra, a autocorrelação, a monotonia do ciclo de rolagem e a IV "
+        "como previsor. Cinco ocorrências deixaram de ser coincidência e viraram critério.", cor=RED)
+
+h2("6.12 Outras hipóteses testadas e eliminadas")
+
+ROL = R["rolagem"]
+h3("Ciclo de rolagem do contrato")
+p(f"Os contratos rolam a cada 20,2 pregões — praticamente o mesmo período do horizonte alvo — e "
+  f"a volatilidade medida cai conforme o contrato envelhece. O sentido é o INVERSO do efeito "
+  f"Samuelson, o que sugere artefato de medição: a liquidez migra para o vencimento seguinte, "
+  f"menos negócios exploram a amplitude do dia e o estimador encolhe. Dessazonalizar, porém, "
+  f"quase não move a autocorrelação (defasagem 1: de {num(ROL['acf_original'][0],4)} para "
+  f"{num(ROL['acf_dessazonalizada'][0],4)}) e piora a previsão em todos os horizontes.")
+p("O diagnóstico do porquê é instrutivo: o fator sazonal não é estável entre folds e não é "
+  "monotônico em nenhum fold isolado. A monotonia que aparecia na amostra completa era artefato "
+  "de agregação — o mesmo mecanismo da Seção 6.6.")
+
+GA = R["garch"]
+h3("GARCH(1,1) reavaliado")
+p("O veredito anterior de que o GARCH era pior que o HAR-RV havia sido obtido sobre a fonte de "
+  "preço defeituosa, apenas em 21 dias e com amostra menor. Refeito sobre o mesmo input que o "
+  "HAR (retorno ao quadrado), o resultado se qualifica:")
+table(["Horizonte", "GARCH(1,1)", "HAR-RV (mesmo input)"],
+      [(f"{h} dia(s)", fmt(GA[h]["garch"]), fmt(GA[h]["har_mesmo_input"])) for h in ("1", "5", "21")],
+      widths=[1.6, 1.6, 2.0], highlight={0})
+p("Em um dia o GARCH SUPERA o HAR-RV — é o horizonte para o qual ele foi construído, sendo um "
+  "modelo de variância condicional de um passo à frente. Em horizontes longos o HAR vence, como "
+  "esperado: o GARCH reverte à variância incondicional a uma taxa geométrica, enquanto os três "
+  "componentes do HAR aproximam memória longa. A limitação estrutural do GARCH aqui é consumir "
+  "retornos, o que o impede de usar estimadores baseados em amplitude.")
+
+CAM = R["camadas_horizonte_curto"]
+h3("Camadas de informação reavaliadas em horizonte curto")
+p("Todas as camadas haviam sido testadas apenas em 21 dias — um regime onde nem o modelo base "
+  "funciona, e portanto sem sinal a ser melhorado. Notícia, em particular, é choque de curtíssimo "
+  "prazo: a média dos 21 dias seguintes é o instrumento errado para detectá-la. A hipótese de "
+  "que o descasamento de horizonte se aplicaria também à feature era razoável, e foi refutada.")
+_rot = {"noticia_bruta": "Notícia (tom bruto)", "noticia_21d": "Notícia (suavizada 21d)",
+        "risco_fiscal": "Risco fiscal (surpresa)", "credibilidade": "Credibilidade (Barro-Gordon)"}
+table(["Camada (h = 1 dia)", "Δ R²", "Folds"],
+      [(_rot[k], fmt(v["1"]["delta"]), f"{v['1']['folds']}/{v['1']['n_folds']}")
+       for k, v in CAM.items() if "delta" in v.get("1", {})],
+      widths=[2.6, 1.3, 1.1])
+p("A notícia é a PIOR camada em horizonte de um dia — o oposto do que a hipótese previa. Nenhuma "
+  "das dez combinações de camada e horizonte atravessa o critério de três exigências que "
+  "passamos a aplicar: ganho positivo, apoio de pelo menos 4 folds em 5, e Diebold-Mariano "
+  "significativo em janelas independentes.")
 
 pagebreak()
 

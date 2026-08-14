@@ -28,16 +28,15 @@ from scipy import stats
 from backtest import engine
 from backtest.metrics import pooled_oos_metrics
 from backtest.walk_forward import purged_walk_forward_splits
+from credibility.credibility import PROCESSED_PATH as CREDIBILITY_PATH
 from data.b3_futures import PROCESSED_PATH as B3_PATH
 from data.fx_spot import PROCESSED_PATH as FX_PATH
-from credibility.credibility import PROCESSED_PATH as CREDIBILITY_PATH
 from data.ptax import PROCESSED_PATH as PTAX_PATH
 from vol.forecast import BASELINE_FEATURES, build_dataset, persistence_forecast
 from vol.realized import (
+    forward_realized_skewness,
     load_b3_futures_prices_and_variance,
     load_parkinson_prices_and_variance,
-    forward_realized_skewness,
-    parkinson_daily_variance,
     parkinson_vol,
 )
 
@@ -135,7 +134,8 @@ def main():
     # numeros principais presos a janela original -- ver JANELA_PRIMARIA_INICIO
     close_b3, var_b3 = _janela_primaria(close_b3_full, var_b3_full)
     fut_full = pd.read_parquet(B3_PATH).set_index("date").sort_index()
-    fut = fut_full[fut_full.index >= pd.Timestamp(JANELA_PRIMARIA_INICIO).tz_localize(fut_full.index.tz)]
+    _corte = pd.Timestamp(JANELA_PRIMARIA_INICIO).tz_localize(fut_full.index.tz)
+    fut = fut_full[fut_full.index >= _corte]
     spot = pd.read_parquet(FX_PATH).set_index("date").sort_index()
     ptax = pd.read_parquet(PTAX_PATH)
     ptax = ptax[ptax["tipo"] == "venda"].set_index("date")["value"].sort_index()
@@ -318,6 +318,14 @@ def main():
     print("8/9 IV propria a partir de negocios de opcao...")
     res["iv_propria"] = _iv_propria()
 
+    print("9/9 h=1, combinacao, rolagem, GARCH, camadas e backtest com IV real...")
+    res["h1_positivo"] = _h1_positivo(var_b3_full)
+    res["combinacao"] = _combinacao(var_b3_full)
+    res["rolagem"] = _rolagem()
+    res["garch"] = _garch(close_b3_full)
+    res["camadas_horizonte_curto"] = _camadas_horizonte_curto()
+    res["backtest_iv_real"] = _backtest_iv_real(close_b3_full, var_b3_full)
+
     (OUT_DIR / "resultados.json").write_text(
         json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -406,7 +414,8 @@ def _investigacoes_novas(close_full: pd.Series, var_full: pd.Series) -> dict:
     ml = {}
     for h in (1, 5, 21):
         r = run_ml_ablation(var_full, horizon=h)
-        ml[str(h)] = {k: r[k]["r2_oos"] for k in ("har", "xgb_arvore", "xgb_linear", "persistencia")}
+        modelos = ("har", "xgb_arvore", "xgb_linear", "persistencia")
+        ml[str(h)] = {k: r[k]["r2_oos"] for k in modelos}
     out["ml"] = ml
 
     # --- combinacao de previsoes (parecia o melhor achado; nao sobrevive) ---
@@ -423,6 +432,256 @@ def _investigacoes_novas(close_full: pd.Series, var_full: pd.Series) -> dict:
             linha[str(h)] = {"har": har["r2_oos"], "persist": per["r2_oos"]}
         comb[rot] = linha
     out["combinacao_subperiodo"] = comb
+    return out
+
+
+SUBPERIODOS = {
+    "2018-2019": ("2018-01-01", "2020-01-01"),
+    "2021-2022": ("2021-01-01", "2023-01-01"),
+    "2023-2026": ("2023-01-01", "2027-01-01"),
+}
+
+
+def _fatias(var: pd.Series) -> dict[str, pd.Series]:
+    out = {r: var[(var.index >= a) & (var.index < b)] for r, (a, b) in SUBPERIODOS.items()}
+    out["COMPLETA"] = var
+    return out
+
+
+def _dm(alvo, f1, f2, passo):
+    """Diebold-Mariano com janelas INDEPENDENTES (uma a cada `passo`).
+    d < 0 => f1 melhor. Devolve (n, t, p)."""
+    d = (((alvo - f1) ** 2) - ((alvo - f2) ** 2)).iloc[:: max(passo, 1)]
+    n = len(d)
+    if n < 3:
+        return n, float("nan"), float("nan")
+    t = d.mean() / (d.std(ddof=1) / np.sqrt(n))
+    return n, float(t), float(2 * (1 - stats.t.cdf(abs(t), n - 1)))
+
+
+def _har_e_persistencia(var: pd.Series, horizon: int):
+    """Previsoes OOS de HAR e persistencia nos mesmos folds purgados."""
+    from vol.forecast import (
+        fit_har,
+        forward_target_from_variance,
+        har_features_from_variance,
+        predict,
+    )
+    from vol.realized import TRADING_DAYS_PER_YEAR
+
+    ds = har_features_from_variance(var)
+    ds["target"] = forward_target_from_variance(var, horizon)
+    ds = ds.dropna()
+    folds = purged_walk_forward_splits(ds, 5, horizon, 5)
+    H, P, A, fh = [], [], [], 0
+    for tr, te in folds:
+        modelo = fit_har(tr, BASELINE_FEATURES, log_target=True)
+        h = predict(modelo, te, BASELINE_FEATURES, log_target=True)
+        p = np.sqrt(te["rv_m"] * TRADING_DAYS_PER_YEAR) * 100
+        H.append(h)
+        P.append(p)
+        A.append(te["target"])
+        r_h = pooled_oos_metrics(te["target"], h)["r2_oos"]
+        r_p = pooled_oos_metrics(te["target"], p)["r2_oos"]
+        if r_h > r_p:
+            fh += 1
+    return pd.concat(A), pd.concat(H), pd.concat(P), fh, len(folds)
+
+
+def _h1_positivo(var: pd.Series) -> dict:
+    """O unico resultado positivo do projeto: em h=1 o alvo NAO se sobrepoe,
+    entao cada observacao e independente e o Diebold-Mariano e legitimo."""
+    out = {}
+    for rot, v in _fatias(var).items():
+        if len(v) < 250:
+            continue
+        a, h, p, fh, nf = _har_e_persistencia(v, 1)
+        n, t, pv = _dm(a, h, p, 1)
+        out[rot] = {
+            "n": int(len(a)),
+            "har_r2": pooled_oos_metrics(a, h)["r2_oos"],
+            "persist_r2": pooled_oos_metrics(a, p)["r2_oos"],
+            "folds_har_melhor": fh, "n_folds": nf,
+            "dm_t": t, "dm_p": pv,
+        }
+    return out
+
+
+def _combinacao(var: pd.Series) -> dict:
+    """Combinacao de pesos iguais (Bates & Granger 1969). Parecia o melhor
+    achado do projeto na amostra completa e NAO sobrevive ao subperiodo --
+    e o quinto falso positivo, o mais didatico deles."""
+    out = {}
+    for rot, v in _fatias(var).items():
+        if len(v) < 250:
+            continue
+        linha = {}
+        for h in (1, 21):
+            a, hh, pp, _, _ = _har_e_persistencia(v, h)
+            cc = (hh + pp) / 2
+            r_h = pooled_oos_metrics(a, hh)["r2_oos"]
+            r_p = pooled_oos_metrics(a, pp)["r2_oos"]
+            base = hh if r_h >= r_p else pp
+            n, t, pv = _dm(a, cc, base, h)
+            linha[str(h)] = {
+                "har": r_h, "persist": r_p,
+                "combinado": pooled_oos_metrics(a, cc)["r2_oos"],
+                "delta": pooled_oos_metrics(a, cc)["r2_oos"] - max(r_h, r_p),
+                "dm_p": pv,
+            }
+        out[rot] = linha
+    return out
+
+
+def _rolagem() -> dict:
+    """Ciclo de rolagem: a monotonia aparente que se revelou artefato de
+    agregacao, e a correcao que nao ajuda."""
+    from backtest.roll_ablation import run_roll_ablation
+    from vol.roll import deseasonalize, load_b3_futures_with_dte, seasonal_factor
+
+    _, var, dte = load_b3_futures_with_dte()
+    fator = seasonal_factor(var, dte)
+    ajust = deseasonalize(var, dte, fator)
+    out = {
+        "fator_amostra_completa": {str(k): float(v) for k, v in fator.items()},
+        "acf_original": [float(var.autocorr(lag)) for lag in (1, 5, 21)],
+        "acf_dessazonalizada": [float(ajust.autocorr(lag)) for lag in (1, 5, 21)],
+        "ablacao": {},
+    }
+    for h in (1, 21):
+        r = run_roll_ablation(var, dte, horizon=h)
+        out["ablacao"][str(h)] = {
+            "baseline": r["baseline_pooled"]["r2_oos"],
+            "dessazonalizada": r["dessazonalizada_pooled"]["r2_oos"],
+            "com_dte": r["com_dte_pooled"]["r2_oos"],
+        }
+    return out
+
+
+def _garch(precos: pd.Series) -> dict:
+    """GARCH(1,1) contra HAR sobre o MESMO input (retorno^2) -- o veredito
+    antigo tinha sido obtido sobre fonte defeituosa e so em h=21."""
+    from vol.garch import garch_forward_target_forecast
+    from vol.realized import log_returns
+
+    var_ret = log_returns(precos) ** 2
+    out = {}
+    for h in (1, 5, 21):
+        a, hh, _, _, _ = _har_e_persistencia(var_ret, h)
+        from vol.forecast import forward_target_from_variance, har_features_from_variance
+
+        ds = har_features_from_variance(var_ret)
+        ds["target"] = forward_target_from_variance(var_ret, h)
+        ds = ds.dropna()
+        folds = purged_walk_forward_splits(ds, 5, h, 5)
+        G = []
+        for tr, te in folds:
+            try:
+                G.append(garch_forward_target_forecast(precos, tr.index[-1], te.index, h))
+            except Exception:
+                G.append(pd.Series(np.nan, index=te.index))
+        g = pd.concat(G)
+        ok = g.notna()
+        out[str(h)] = {
+            "garch": pooled_oos_metrics(a[ok], g[ok])["r2_oos"],
+            "har_mesmo_input": pooled_oos_metrics(a[ok], hh[ok])["r2_oos"],
+            "n": int(ok.sum()),
+        }
+    return out
+
+
+def _camadas_horizonte_curto() -> dict:
+    """As camadas de informacao reavaliadas em h=1 e h=5. Elas so tinham sido
+    testadas em h=21, onde nem o baseline funciona."""
+    from backtest import ablation
+    from credibility import ablation as cred
+
+    testes = {
+        "noticia_bruta": lambda h: ablation.load_and_run_purged_ablation(
+            horizon=h, n_splits=5, embargo_days=5, source="b3", news_smooth_window=None),
+        "noticia_21d": lambda h: ablation.load_and_run_purged_ablation(
+            horizon=h, n_splits=5, embargo_days=5, source="b3", news_smooth_window=21),
+        "risco_fiscal": lambda h: ablation.load_and_run_fiscal_risk_ablation(
+            horizon=h, n_splits=5, embargo_days=5, source="b3", use_surprise=True),
+        "credibilidade": lambda h: cred.load_and_run_credibility_ablation(
+            horizon=h, n_splits=5, embargo_days=5, source="b3"),
+    }
+    out = {}
+    for nome, fn in testes.items():
+        out[nome] = {}
+        for h in (1, 5):
+            try:
+                r = fn(h)
+                outra = [k for k in r if k.endswith("_pooled") and k != "baseline_pooled"][0]
+                pf = r["per_fold"]
+                chave = [k for k in pf if k != "baseline"][0]
+                melhora = sum(
+                    1 for x, y in zip(pf[chave], pf["baseline"])
+                    if x["r2_oos"] > y["r2_oos"]
+                )
+                out[nome][str(h)] = {
+                    "baseline": r["baseline_pooled"]["r2_oos"],
+                    "com_camada": r[outra]["r2_oos"],
+                    "delta": r[outra]["r2_oos"] - r["baseline_pooled"]["r2_oos"],
+                    "folds": melhora, "n_folds": len(pf["baseline"]),
+                }
+            except Exception as e:  # dado auxiliar ausente nao derruba o relatorio
+                out[nome][str(h)] = {"erro": f"{type(e).__name__}: {str(e)[:80]}"}
+    return out
+
+
+def _backtest_iv_real(precos: pd.Series, var: pd.Series) -> dict:
+    """Backtest com IV REAL (primeira vez possivel) contra a proxy, e a
+    decomposicao que mostra a perda ANTES dos custos."""
+    try:
+        from data.b3_options import load_option_trades
+        from vol.iv_trades import daily_atm_iv
+    except ImportError:
+        return {"disponivel": False}
+    from backtest.engine import generate_oos_rv_forecast, proxy_iv, run_backtest
+    from backtest.metrics import sharpe_ratio
+    from backtest.walk_forward import purged_walk_forward_splits_by_step
+    from vol.forecast import forward_target_from_variance, har_features_from_variance
+    from vol.realized import TRADING_DAYS_PER_YEAR
+
+    try:
+        iv_real = daily_atm_iv(load_option_trades())
+    except FileNotFoundError:
+        return {"disponivel": False}
+    if iv_real.empty:
+        return {"disponivel": False}
+
+    idx = pd.DatetimeIndex([d.date() for d in precos.index])
+    p = pd.Series(precos.to_numpy(), index=idx)
+    v = pd.Series(var.to_numpy(), index=idx)
+    ds = har_features_from_variance(v)
+    ds["target"] = forward_target_from_variance(v, 21)
+    ds = ds.dropna()
+    folds = purged_walk_forward_splits_by_step(
+        ds, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+    )
+    fc = generate_oos_rv_forecast(ds, BASELINE_FEATURES, 21, 5, 5, log_target=True, folds=folds)
+    trail = np.sqrt(v.rolling(21).mean() * TRADING_DAYS_PER_YEAR) * 100
+
+    out = {"disponivel": True, "sobreposicao_dias": int(len(fc.index.intersection(iv_real.index)))}
+    for rot, ivs in (("iv_real", iv_real),
+                     ("iv_proxy", proxy_iv(trail, 1.29).reindex(iv_real.index).dropna())):
+        tr = run_backtest(p, fc, ivs, horizon=21, band_pct=1.0, spread_pct=0.05)
+        if tr.empty:
+            out[rot] = {"trades": 0}
+            continue
+        bruto = run_backtest(p, fc, ivs, horizon=21, band_pct=1.0, spread_pct=0.0)
+        out[rot] = {
+            "trades": int(len(tr)),
+            "long": int((tr["signal"] == 1).sum()),
+            "short": int((tr["signal"] == -1).sum()),
+            "pnl_liquido": float(tr["pnl_net"].sum()),
+            "pnl_bruto_sem_custo": float(bruto["pnl_gross"].sum()),
+            "acerto": float((tr["pnl_net"] > 0).mean()),
+            "sharpe": float(
+                sharpe_ratio(tr["pnl_net"] / 1000, annualization_factor=np.sqrt(252 / 21))
+            ),
+        }
     return out
 
 
