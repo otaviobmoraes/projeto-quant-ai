@@ -23,6 +23,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.stats import binomtest, norm
 
 EULER_MASCHERONI = 0.5772156649015329
@@ -139,3 +140,183 @@ def directional_accuracy(forecast: pd.Series, actual: pd.Series, reference: pd.S
     pvalue = float(binomtest(hits, n, 0.5).pvalue) if n > 0 else float("nan")
 
     return {"n": n, "hits": hits, "accuracy": accuracy, "pvalue_vs_50pct": pvalue}
+
+
+def max_drawdown(returns) -> dict:
+    """Maior queda acumulada da curva de patrimonio construida por
+    capitalizacao composta dos retornos por trade.
+
+    Devolve a profundidade (fracao do pico), o indice do pico e o do vale --
+    os indices permitem localizar QUANDO o rebaixamento aconteceu, que e a
+    pergunta que um avaliador faz depois de ver a magnitude.
+    """
+    r = np.asarray(returns, dtype=float)
+    if r.size == 0:
+        return {"max_drawdown": float("nan"), "pico": -1, "vale": -1}
+    equity = np.cumprod(1.0 + r)
+    picos = np.maximum.accumulate(equity)
+    rebaixamento = equity / picos - 1.0
+    vale = int(np.argmin(rebaixamento))
+    return {
+        "max_drawdown": float(rebaixamento[vale]),
+        "pico": int(np.argmax(equity[: vale + 1])) if vale >= 0 else -1,
+        "vale": vale,
+    }
+
+
+def annualized_return(returns, trades_per_year: float) -> float:
+    """Retorno anualizado GEOMETRICO dos retornos por trade.
+
+    Geometrico, e nao media aritmetica vezes o numero de trades, porque a
+    estrategia reinveste: uma sequencia +50%/-50% tem media aritmetica zero e
+    retorno real de -25%. Reportar a media aritmetica aqui superestimaria
+    sistematicamente o desempenho.
+    """
+    r = np.asarray(returns, dtype=float)
+    if r.size == 0 or np.any(r <= -1.0):
+        return float("nan")
+    total = float(np.prod(1.0 + r))
+    anos = r.size / trades_per_year
+    return float(total ** (1.0 / anos) - 1.0) if anos > 0 else float("nan")
+
+
+def performance_summary(
+    returns,
+    n_trials: int,
+    trades_per_year: float = 12.0,
+    sr_trials_std: float | None = None,
+) -> dict:
+    """Conjunto completo de metricas de desempenho de uma serie de retornos
+    POR TRADE (nao sobrepostos).
+
+    `n_trials`: numero de configuracoes testadas no projeto ate aqui. Entra no
+    Deflated Sharpe, que desconta do Sharpe observado aquilo que se esperaria
+    obter por acaso ao testar muitas configuracoes (Bailey & Lopez de Prado,
+    2014). Passar o numero REAL -- inclusive experimentos de previsao, nao so
+    variantes de backtest -- e a escolha conservadora e a correta.
+
+    `sr_trials_std`: dispersao dos Sharpes entre as configuracoes testadas. Se
+    nao informada, usa 1.0, que e deliberadamente PUNITIVO: quanto maior a
+    dispersao, mais alto o Sharpe maximo esperado por acaso e menor o DSR.
+
+    ADVERTENCIA sobre o denominador: os retornos usados aqui sao relativos ao
+    premio comprometido no trade. Para venda de volatilidade a perda potencial
+    e ILIMITADA, entao esse denominador SUBESTIMA o risco real da perna
+    vendida. Qualquer leitura de "retorno sobre capital" aqui precisa carregar
+    essa ressalva.
+    """
+    r = np.asarray(returns, dtype=float)
+    n = int(r.size)
+    if n == 0:
+        return {"n_trades": 0}
+
+    sr = sharpe_ratio(r, annualization_factor=trades_per_year)
+    dd = max_drawdown(r)
+    skew = float(stats.skew(r)) if n > 2 else 0.0
+    kurt = float(stats.kurtosis(r, fisher=False)) if n > 3 else 3.0
+
+    return {
+        "n_trades": n,
+        "sharpe": sr,
+        "retorno_anualizado": annualized_return(r, trades_per_year),
+        "retorno_medio_por_trade": float(r.mean()),
+        "volatilidade_por_trade": float(r.std(ddof=1)) if n > 1 else float("nan"),
+        "max_drawdown": dd["max_drawdown"],
+        "trade_do_vale": dd["vale"],
+        "win_rate": float((r > 0).mean()),
+        "skew": skew,
+        "kurtose": kurt,
+        "psr_vs_zero": probabilistic_sharpe_ratio(sr, 0.0, n, skew, kurt),
+        # DSR nao e definido com menos de 2 configuracoes: nao existe "maximo
+        # esperado por acaso" sobre uma amostra de uma. Devolvemos NaN em vez
+        # de estourar, para o resumo continuar utilizavel em diagnostico.
+        "deflated_sharpe": (
+            deflated_sharpe_ratio(
+                sr, sr_trials_std if sr_trials_std is not None else 1.0, n_trials, n, skew, kurt
+            )
+            if n_trials >= 2
+            else float("nan")
+        ),
+        "n_trials_usado": int(n_trials),
+    }
+
+
+def max_drawdown_absolute(pnl) -> dict:
+    """Maior rebaixamento da curva de P&L ACUMULADO, em unidades absolutas.
+
+    Diferente de `max_drawdown`, que capitaliza retornos percentuais: aqui a
+    curva e a soma acumulada do P&L. Existe porque para uma carteira VENDIDA em
+    opcao a perda de um unico trade pode superar varias vezes o premio
+    comprometido, o que torna qualquer retorno percentual sobre premio
+    inferior a -100% -- e capitalizacao composta abaixo de -100% nao tem
+    sentido (o patrimonio ficaria negativo e depois "recuperaria").
+    """
+    x = np.asarray(pnl, dtype=float)
+    if x.size == 0:
+        return {"max_drawdown": float("nan"), "pico": -1, "vale": -1}
+    curva = np.cumsum(x)
+    picos = np.maximum.accumulate(curva)
+    rebaixamento = curva - picos
+    vale = int(np.argmin(rebaixamento))
+    return {
+        "max_drawdown": float(rebaixamento[vale]),
+        "pico": int(np.argmax(curva[: vale + 1])),
+        "vale": vale,
+    }
+
+
+def pnl_performance_summary(
+    pnl,
+    n_trials: int,
+    trades_per_year: float = 12.0,
+    sr_trials_std: float | None = None,
+) -> dict:
+    """Resumo de desempenho a partir do P&L POR TRADE, em unidades absolutas.
+
+    POR QUE NAO HA "RETORNO SOBRE CAPITAL" AQUI: a estrategia vende
+    volatilidade na maioria das operacoes, e a perda de uma venda de straddle e
+    ilimitada -- nao ha base de capital derivavel do premio que a absorva. O
+    capital efetivamente exigido e a MARGEM, que depende de regras da camara e
+    nao esta nos dados. Declarar uma base arbitraria produziria justamente o
+    numero mais visivel da secao a partir de uma suposicao inventada.
+
+    O que sobrevive a essa limitacao, e por isso e o que reportamos:
+    - SHARPE, que e invariante a escala (dividir todo o P&L por qualquer
+      constante nao o altera), portanto valido sem base de capital;
+    - PSR e DEFLATED SHARPE, que derivam do Sharpe;
+    - drawdown em unidades ABSOLUTAS, bem definido sobre P&L acumulado.
+    """
+    x = np.asarray(pnl, dtype=float)
+    n = int(x.size)
+    if n == 0:
+        return {"n_trades": 0}
+
+    sr = sharpe_ratio(x, annualization_factor=trades_per_year)
+    dd = max_drawdown_absolute(x)
+    skew = float(stats.skew(x)) if n > 2 else 0.0
+    kurt = float(stats.kurtosis(x, fisher=False)) if n > 3 else 3.0
+
+    return {
+        "n_trades": n,
+        "sharpe": sr,
+        "pnl_total": float(x.sum()),
+        "pnl_medio_por_trade": float(x.mean()),
+        "pnl_por_ano": float(x.sum() / (n / trades_per_year)),
+        "volatilidade_por_trade": float(x.std(ddof=1)) if n > 1 else float("nan"),
+        "max_drawdown_abs": dd["max_drawdown"],
+        "trade_do_vale": dd["vale"],
+        "maior_perda": float(x.min()),
+        "maior_ganho": float(x.max()),
+        "win_rate": float((x > 0).mean()),
+        "skew": skew,
+        "kurtose": kurt,
+        "psr_vs_zero": probabilistic_sharpe_ratio(sr, 0.0, n, skew, kurt),
+        "deflated_sharpe": (
+            deflated_sharpe_ratio(
+                sr, sr_trials_std if sr_trials_std is not None else 1.0, n_trials, n, skew, kurt
+            )
+            if n_trials >= 2
+            else float("nan")
+        ),
+        "n_trials_usado": int(n_trials),
+    }

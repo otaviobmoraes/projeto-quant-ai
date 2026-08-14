@@ -325,6 +325,7 @@ def main():
     res["garch"] = _garch(close_b3_full)
     res["camadas_horizonte_curto"] = _camadas_horizonte_curto()
     res["backtest_iv_real"] = _backtest_iv_real(close_b3_full, var_b3_full)
+    res["backtest_completo"] = _backtest_completo(close_b3_full, var_b3_full)
 
     (OUT_DIR / "resultados.json").write_text(
         json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -628,6 +629,104 @@ def _camadas_horizonte_curto() -> dict:
             except Exception as e:  # dado auxiliar ausente nao derruba o relatorio
                 out[nome][str(h)] = {"erro": f"{type(e).__name__}: {str(e)[:80]}"}
     return out
+
+
+def _backtest_completo(precos: pd.Series, var: pd.Series, n_trials: int = 35) -> dict:
+    """Backtest com IV REAL, com o conjunto de metricas que uma secao de
+    desempenho precisa ter: trades, Sharpe, retorno anualizado, drawdown
+    maximo e Deflated Sharpe.
+
+    `n_trials` recebe o numero REAL de configuracoes testadas no projeto --
+    nao apenas as variantes de backtest. E a escolha conservadora: o DSR
+    desconta do Sharpe observado aquilo que se obteria por acaso testando
+    muitas configuracoes, e subdeclarar esse numero inflaria o resultado.
+
+    Roda tambem faixas de banda morta diferentes. O objetivo NAO e escolher a
+    melhor -- isso seria selecao -- e sim mostrar se o veredito e estavel ou
+    se depende de um ajuste especifico.
+    """
+    from backtest.engine import generate_oos_rv_forecast, run_backtest
+    from backtest.metrics import pnl_performance_summary
+    from backtest.walk_forward import purged_walk_forward_splits_by_step
+    from vol.forecast import forward_target_from_variance, har_features_from_variance
+
+    try:
+        from data.b3_options import load_option_trades
+        from vol.iv_trades import daily_atm_iv
+
+        iv_real = daily_atm_iv(load_option_trades())
+    except (ImportError, FileNotFoundError):
+        return {"disponivel": False}
+    if iv_real.empty:
+        return {"disponivel": False}
+
+    idx = pd.DatetimeIndex([d.date() for d in precos.index])
+    p = pd.Series(precos.to_numpy(), index=idx)
+    v = pd.Series(var.to_numpy(), index=idx)
+    ds = har_features_from_variance(v)
+    ds["target"] = forward_target_from_variance(v, 21)
+    ds = ds.dropna()
+    folds = purged_walk_forward_splits_by_step(
+        ds, min_train_size=252, step_size=21, horizon=21, embargo_days=5
+    )
+    fc = generate_oos_rv_forecast(ds, BASELINE_FEATURES, 21, 5, 5, log_target=True, folds=folds)
+
+    trades_por_ano = 252 / 21
+
+    # SEM BASE DE CAPITAL, e a razao e substantiva, nao preferencia.
+    # Duas tentativas anteriores falharam: dividir pelo premio de cada trade e
+    # dividir pelo maior premio comprometido. Ambas produziram retornos abaixo
+    # de -100%, drawdown de -186% e retorno anualizado NaN. A causa e que a
+    # estrategia opera majoritariamente VENDIDA, e a perda de uma venda de
+    # straddle nao tem teto -- um unico trade perde varias vezes o premio.
+    # O capital realmente exigido e a MARGEM, que depende de regras da camara e
+    # nao esta nos dados. Declarar uma base arbitraria fabricaria justamente o
+    # numero mais visivel da secao.
+    #
+    # Reportamos entao o que sobrevive: Sharpe (invariante a escala, portanto
+    # valido sem base de capital), PSR, Deflated Sharpe e drawdown em unidades
+    # ABSOLUTAS de P&L. Ver backtest.metrics.pnl_performance_summary.
+    todos = [
+        run_backtest(p, fc, iv_real, horizon=21, band_pct=b, spread_pct=0.05)
+        for b in (0.5, 1.0, 2.0)
+    ]
+    bandas: dict = {}
+    retornos: dict[str, np.ndarray] = {}
+    for banda, tr in zip((0.5, 1.0, 2.0), todos):
+        if tr.empty:
+            bandas[str(banda)] = {"n_trades": 0}
+            continue
+        ret = tr["pnl_net"].to_numpy()
+        retornos[str(banda)] = ret
+        resumo = pnl_performance_summary(ret, n_trials=n_trials, trades_per_year=trades_por_ano)
+        resumo.update({
+            "pnl_bruto": float(tr["pnl_gross"].sum()),
+            "long": int((tr["signal"] == 1).sum()),
+            "short": int((tr["signal"] == -1).sum()),
+            "inicio": str(tr["entry_date"].min().date()),
+            "fim": str(tr["exit_date"].max().date()),
+        })
+        bandas[str(banda)] = resumo
+
+    # O DSR padrao usa dispersao 1,0 entre trials, que e deliberadamente
+    # punitiva. Tendo rodado varias bandas, da para usar a dispersao OBSERVADA
+    # dos Sharpes -- mais fiel, e sem afrouxar nada arbitrariamente.
+    sharpes = [b["sharpe"] for b in bandas.values() if isinstance(b, dict) and "sharpe" in b]
+    if len(sharpes) > 1 and "1.0" in retornos:
+        std_obs = float(np.std(sharpes, ddof=1))
+        if std_obs > 0:
+            refinado = pnl_performance_summary(
+                retornos["1.0"], n_trials=n_trials,
+                trades_per_year=trades_por_ano, sr_trials_std=std_obs,
+            )
+            bandas["1.0"]["deflated_sharpe_std_observado"] = refinado["deflated_sharpe"]
+            bandas["sr_trials_std_observado"] = std_obs
+
+    if "1.0" in retornos:
+        bandas["curva_banda_1"] = [float(x) for x in np.cumsum(retornos["1.0"])]
+    bandas["disponivel"] = True
+    bandas["n_trials"] = n_trials
+    return bandas
 
 
 def _backtest_iv_real(precos: pd.Series, var: pd.Series) -> dict:

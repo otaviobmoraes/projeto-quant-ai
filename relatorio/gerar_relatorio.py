@@ -1299,6 +1299,75 @@ if BT.get("disponivel") and BT.get("iv_real", {}).get("trades"):
             "que é coerente com uma previsão de R² negativo sendo comparada contra uma "
             "implícita informativa.", cor=RED)
 
+BC = R.get("backtest_completo", {})
+if BC.get("disponivel") and BC.get("1.0", {}).get("n_trades"):
+    _c = BC["1.0"]
+    h3("Métricas de desempenho")
+    p(f"Com a série de implícita adensada, o backtest passa a {_c['n_trades']} operações não "
+      f"sobrepostas entre {_c['inicio']} e {_c['fim']}.")
+
+    callout("Por que não há retorno percentual nem 'retorno sobre capital' aqui.",
+            "A estratégia opera majoritariamente VENDIDA em volatilidade, e a perda de uma venda "
+            "de straddle não tem teto: uma única operação perde várias vezes o prêmio "
+            "comprometido. Não existe base de capital derivável do prêmio que absorva isso — "
+            "tentar produz retornos abaixo de −100% e drawdown sem sentido. O capital realmente "
+            "exigido é a margem, que depende de regras da câmara e não está nos dados. Declarar "
+            "uma base arbitrária fabricaria justamente o número mais visível desta seção. "
+            "Reportamos o que sobrevive: o Sharpe é invariante a escala e portanto válido sem "
+            "base de capital, assim como as métricas derivadas dele; o drawdown vai em unidades "
+            "absolutas de P&L.", cor=AMBER)
+
+    table(["Métrica", "Valor"],
+          [("Operações (não sobrepostas)", num(_c["n_trades"], 0)),
+           ("Compra / venda de volatilidade", f"{_c['long']} / {_c['short']}"),
+           ("Taxa de acerto", f"{num(100*_c['win_rate'], 1)}%"),
+           ("P&L total", num(_c["pnl_total"], 0)),
+           ("P&L médio por operação", num(_c["pnl_medio_por_trade"], 0)),
+           ("Maior ganho / maior perda",
+            f"{num(_c['maior_ganho'], 0)} / {num(_c['maior_perda'], 0)}"),
+           ("Drawdown máximo (absoluto)", num(_c["max_drawdown_abs"], 0)),
+           ("Sharpe anualizado", fmt(_c["sharpe"])),
+           ("Assimetria do P&L", fmt(_c["skew"])),
+           ("PSR (prob. de Sharpe > 0)", num(_c["psr_vs_zero"], 3)),
+           (f"Deflated Sharpe ({BC['n_trials']} configurações)", num(_c["deflated_sharpe"], 3))],
+          widths=[3.4, 2.0], highlight={7, 10})
+
+    _bandas = [(b, BC[b]) for b in ("0.5", "1.0", "2.0") if BC.get(b, {}).get("n_trades")]
+    if len(_bandas) > 1:
+        h3("O teste que decide: estabilidade a um parâmetro de segunda ordem")
+        p("A banda morta define quão grande o spread entre RV prevista e implícita precisa ser "
+          "para acionar uma operação. É um parâmetro de ajuste, não de tese — um resultado "
+          "robusto não deveria depender materialmente dele.")
+        table(["Banda morta", "Operações", "Sharpe", "PSR", "Deflated Sharpe", "P&L total"],
+              [(num(float(b), 1), num(v["n_trades"], 0), fmt(v["sharpe"]),
+                num(v["psr_vs_zero"], 3), num(v["deflated_sharpe"], 3), num(v["pnl_total"], 0))
+               for b, v in _bandas],
+              widths=[1.3, 1.2, 1.1, 0.9, 1.5, 1.4], highlight={0, 1, 2})
+        p("O Sharpe TROCA DE SINAL entre as três configurações. Não é uma variação de magnitude: "
+          "é a diferença entre uma estratégia aparentemente lucrativa e uma claramente perdedora, "
+          "produzida por mexer num limiar. Com 40 operações e assimetria de P&L em torno de −1,5, "
+          "poucas perdas grandes dominam o resultado — a maior perda é cerca de três vezes o "
+          "maior ganho, o perfil clássico de venda de volatilidade.")
+
+        callout("A demonstração mais limpa do Deflated Sharpe neste relatório.",
+                "Duas das três bandas têm PSR acima de 0,94: isoladamente, cada uma pareceria "
+                "uma estratégia com alta probabilidade de Sharpe positivo. O Deflated Sharpe "
+                f"das três é ZERO. A diferença é que o PSR olha uma configuração isolada, "
+                f"enquanto o DSR desconta o fato de termos testado {BC['n_trials']} "
+                "configurações ao longo do projeto (Bailey & López de Prado, 2014). Alimentamos "
+                "o DSR com o número real, incluindo os experimentos de previsão e não apenas as "
+                "variantes de backtest — subdeclará-lo inflaria o resultado. É precisamente o "
+                "tipo de armadilha que um backtest apresentado sem esse desconto esconderia.",
+                cor=RED)
+
+    callout("Limites que permanecem.",
+            "O backtest resolve o payoff terminal sem delta-hedge, medindo portanto direção mais "
+            "ruído, e não exposição pura a volatilidade — que era a tese. As operações se "
+            "concentram em 2019-2023, período que não coincide com a janela principal deste "
+            "relatório, porque é onde existe implícita reconstruída. E 40 operações continuam "
+            "sendo amostra pequena. Estes números caracterizam o comportamento do motor; não "
+            "são evidência de desempenho alcançável.", cor=RED)
+
 h2("6.5 Por que R² e taxa de acerto podem discordar")
 
 p("Vale explicitar essa distinção, porque ela é fonte recorrente de leitura equivocada em "
