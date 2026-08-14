@@ -58,6 +58,38 @@ AMBER = "#b8860b"
 
 HORIZONS = [1, 3, 5, 10, 15, 21]
 
+# ---------------------------------------------------------------------------
+# JANELA PRIMARIA DO RELATORIO -- nao remover sem ler isto.
+#
+# A amostra do projeto foi estendida de 830 para 2.135 pregoes (retroagindo a
+# 2018-01). Se este script simplesmente usasse tudo, o R2 em h=21 saltaria de
+# -0,255 para +0,381 e o relatorio passaria a AFIRMAR QUE O MODELO FUNCIONA.
+#
+# Esse salto e ARTEFATO, nao melhora, e esta diagnosticado em tres frentes
+# (report/run_report.py:CONFIGS_TESTED): (a) a persistencia, que nao tem
+# parametro nenhum, salta junto (-0,367 -> +0,365); (b) com periodo de TESTE
+# fixo, treinar com 8,5 anos em vez de 1 muda o RMSE em 1,4% e o R2 continua
+# negativo; (c) a autocorrelacao de cada subperiodo e MENOR que a da amostra
+# completa. A amostra mistura regimes de vol muito diferentes, e isso infla o
+# denominador (ss_tot) de qualquer metrica calculada no pool.
+#
+# Por isso os numeros PRINCIPAIS do relatorio ficam presos a janela original, e
+# a amostra estendida entra como resultado SEPARADO e rotulado -- inclusive
+# porque a comparacao entre as duas e, ela mesma, um dos achados.
+# ---------------------------------------------------------------------------
+JANELA_PRIMARIA_INICIO = "2023-04-10"
+
+
+def _janela_primaria(*series: pd.Series) -> tuple[pd.Series, ...]:
+    """Corta as series para a janela primaria do relatorio (ver acima)."""
+    corte = pd.Timestamp(JANELA_PRIMARIA_INICIO)
+    out = []
+    for s in series:
+        idx = s.index
+        limite = corte.tz_localize(idx.tz) if getattr(idx, "tz", None) is not None else corte
+        out.append(s[idx >= limite])
+    return tuple(out)
+
 
 def _axes(figsize=(9, 4.6)):
     fig, ax = plt.subplots(figsize=figsize, facecolor=SURFACE)
@@ -99,8 +131,11 @@ def main():
 
     print("1/6 carregando fontes...")
     close_yf, var_yf = load_parkinson_prices_and_variance()
-    close_b3, var_b3 = load_b3_futures_prices_and_variance()
-    fut = pd.read_parquet(B3_PATH).set_index("date").sort_index()
+    close_b3_full, var_b3_full = load_b3_futures_prices_and_variance()
+    # numeros principais presos a janela original -- ver JANELA_PRIMARIA_INICIO
+    close_b3, var_b3 = _janela_primaria(close_b3_full, var_b3_full)
+    fut_full = pd.read_parquet(B3_PATH).set_index("date").sort_index()
+    fut = fut_full[fut_full.index >= pd.Timestamp(JANELA_PRIMARIA_INICIO).tz_localize(fut_full.index.tz)]
     spot = pd.read_parquet(FX_PATH).set_index("date").sort_index()
     ptax = pd.read_parquet(PTAX_PATH)
     ptax = ptax[ptax["tipo"] == "venda"].set_index("date")["value"].sort_index()
@@ -112,6 +147,13 @@ def main():
         "b3_contratos": int(fut["ticker"].nunique()),
         "b3_rolagens": int(fut["contract_changed"].sum()),
         "yf_dias": int(len(spot)),
+    }
+    res["amostra_estendida"] = {
+        "b3_pregoes": int(len(fut_full)),
+        "b3_inicio": str(fut_full.index.min().date()),
+        "b3_fim": str(fut_full.index.max().date()),
+        "janelas_independentes_original": int(len(fut) // 21),
+        "janelas_independentes_estendida": int(len(fut_full) // 21),
     }
 
     print("2/6 varredura de horizonte (as duas fontes)...")
@@ -270,10 +312,137 @@ def main():
         }
     res["credibilidade_skew"] = skew_res
 
+    print("7/9 investigacoes novas (amostra estendida, ML, estimadores)...")
+    res.update(_investigacoes_novas(close_b3_full, var_b3_full))
+
+    print("8/9 IV propria a partir de negocios de opcao...")
+    res["iv_propria"] = _iv_propria()
+
     (OUT_DIR / "resultados.json").write_text(
         json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(f"\nresultados.json salvo ({len(res)} blocos)")
+
+
+def _oos_pooled(var_features, var_target, horizon, modelo="har"):
+    """R2/RMSE pooled de um modelo nos folds purgados, com features de uma
+    serie de variancia e ALVO de outra (permite variar so um dos dois)."""
+    from vol.forecast import (
+        fit_har,
+        forward_target_from_variance,
+        har_features_from_variance,
+        predict,
+    )
+    from vol.realized import TRADING_DAYS_PER_YEAR
+
+    ds = har_features_from_variance(var_features)
+    ds["target"] = forward_target_from_variance(var_target, horizon)
+    ds = ds.dropna()
+    folds = purged_walk_forward_splits(ds, 5, horizon, 5)
+    preds, alvos, por_fold = [], [], []
+    for tr, te in folds:
+        if modelo == "persistencia":
+            p = np.sqrt(te["rv_m"] * TRADING_DAYS_PER_YEAR) * 100
+        else:
+            p = predict(
+                fit_har(tr, BASELINE_FEATURES, log_target=True),
+                te, BASELINE_FEATURES, log_target=True,
+            )
+        preds.append(p)
+        alvos.append(te["target"])
+        por_fold.append(pooled_oos_metrics(te["target"], p)["r2_oos"])
+    a, p = pd.concat(alvos), pd.concat(preds)
+    m = pooled_oos_metrics(a, p)
+    return {"r2_oos": m["r2_oos"], "rmse": m["rmse"], "n_obs": int(len(a)), "por_fold": por_fold}
+
+
+def _investigacoes_novas(close_full: pd.Series, var_full: pd.Series) -> dict:
+    """Resultados das investigacoes feitas depois da primeira versao do
+    relatorio: amostra estendida, ML, estimadores de variancia, combinacao e a
+    analise por subperiodo (que e a conclusao metodologica central)."""
+    from vol.realized import load_b3_variance
+
+    out: dict = {}
+    var_orig = _janela_primaria(var_full)[0]
+
+    # --- por que a amostra estendida NAO deve virar o numero principal ------
+    ext = {}
+    for h in (1, 21):
+        ext[str(h)] = {
+            "original_har": _oos_pooled(var_orig, var_orig, h)["r2_oos"],
+            "original_persist": _oos_pooled(var_orig, var_orig, h, "persistencia")["r2_oos"],
+            "estendida_har": _oos_pooled(var_full, var_full, h)["r2_oos"],
+            "estendida_persist": _oos_pooled(var_full, var_full, h, "persistencia")["r2_oos"],
+        }
+    out["artefato_amostra"] = ext
+
+    # --- autocorrelacao por subperiodo (o diagnostico que sustenta tudo) ----
+    janelas = {
+        "2018-2019": ("2018-01-01", "2020-01-01"),
+        "2021-2022": ("2021-01-01", "2023-01-01"),
+        "2023-2026": ("2023-01-01", "2027-01-01"),
+    }
+    acf = {"lags": [1, 5, 10, 21], "completa": [], "por_subperiodo": {}}
+    acf["completa"] = [float(var_full.autocorr(lag)) for lag in acf["lags"]]
+    for rot, (a, b) in janelas.items():
+        s = var_full[(var_full.index >= a) & (var_full.index < b)].dropna()
+        acf["por_subperiodo"][rot] = [float(s.autocorr(lag)) for lag in acf["lags"]]
+    out["autocorrelacao_subperiodo"] = acf
+
+    # --- estimadores de variancia, com alvo ARBITRO (close-to-close) -------
+    _, arbitro = load_b3_variance("close_to_close")
+    estim = {}
+    for e in ("parkinson", "garman_klass", "rogers_satchell", "full_day"):
+        _, v = load_b3_variance(e)
+        estim[e] = {str(h): _oos_pooled(v, arbitro, h)["r2_oos"] for h in (1, 5, 21)}
+    out["estimadores"] = {
+        "nota": "alvo arbitro close-to-close: nao pertence a nenhum candidato",
+        "r2": estim,
+    }
+
+    # --- ML: XGBoost vs HAR, mesmos folds e features ------------------------
+    from backtest.ml_ablation import run_ml_ablation
+
+    ml = {}
+    for h in (1, 5, 21):
+        r = run_ml_ablation(var_full, horizon=h)
+        ml[str(h)] = {k: r[k]["r2_oos"] for k in ("har", "xgb_arvore", "xgb_linear", "persistencia")}
+    out["ml"] = ml
+
+    # --- combinacao de previsoes (parecia o melhor achado; nao sobrevive) ---
+    comb = {}
+    for rot, v in [("COMPLETA", var_full)] + [
+        (r, var_full[(var_full.index >= a) & (var_full.index < b)]) for r, (a, b) in janelas.items()
+    ]:
+        linha = {}
+        for h in (1, 21):
+            if len(v) < 250:
+                continue
+            har = _oos_pooled(v, v, h)
+            per = _oos_pooled(v, v, h, "persistencia")
+            linha[str(h)] = {"har": har["r2_oos"], "persist": per["r2_oos"]}
+        comb[rot] = linha
+    out["combinacao_subperiodo"] = comb
+    return out
+
+
+def _iv_propria() -> dict:
+    """IV historica reconstruida de negocios reais de opcao (Black-76 invertido)
+    e o premio de risco de variancia medido a partir dela."""
+    try:
+        from vol.iv_trades import load_and_evaluate
+
+        r = load_and_evaluate()
+    except FileNotFoundError as e:
+        return {"disponivel": False, "motivo": str(e)}
+    return {
+        "disponivel": True,
+        "n_negocios": r["n_negocios"],
+        "n_pregoes_com_iv": r["n_pregoes_com_iv"],
+        "periodo": r["periodo"],
+        "avaliacao": r["avaliacao"],
+        "premio": r["premio"],
+    }
 
 
 if __name__ == "__main__":

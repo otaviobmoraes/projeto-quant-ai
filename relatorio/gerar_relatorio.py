@@ -34,6 +34,9 @@ MUTED = RGBColor(0x6B, 0x6A, 0x66)
 BLUE = RGBColor(0x1F, 0x5C, 0xA8)
 GREEN = RGBColor(0x00, 0x63, 0x00)
 RED = RGBColor(0xA8, 0x2A, 0x2A)
+# Ambar: usado nos avisos de falso positivo -- alerta sem o peso do vermelho,
+# que fica reservado aos achados centrais e as limitacoes estruturais.
+AMBER = RGBColor(0xB8, 0x86, 0x0B)
 
 doc = Document()
 
@@ -1272,6 +1275,153 @@ p("Um previsor com boa acurácia média pode disparar operações justamente nos
   "volatilidade está temporariamente inflada e prestes a reverter. É por isso que um R² melhor "
   "pode conviver com uma taxa de acerto pior — e por que reportar apenas a segunda seria enganoso.")
 
+# ---------------------------------------------------------------------
+# 6.6 a 6.9 -- investigacoes feitas depois da primeira versao do relatorio
+# ---------------------------------------------------------------------
+h2("6.6 Amostra estendida: por que 2.135 pregões não viram o número principal")
+
+AM = R["amostra_estendida"]
+ART = R["artefato_amostra"]
+p(f"A amostra do futuro foi estendida retroativamente de {num(R['amostra']['b3_pregoes'],0)} para "
+  f"{num(AM['b3_pregoes'],0)} pregões (início em {AM['b3_inicio']}), o que leva as janelas "
+  f"independentes de 21 dias de {AM['janelas_independentes_original']} para "
+  f"{AM['janelas_independentes_estendida']}. O efeito sobre o R² é espetacular — e enganoso.")
+
+table(["Horizonte", "Modelo", "Amostra original", "Amostra estendida"],
+      [("1 dia", "HAR-RV", fmt(ART["1"]["original_har"]), fmt(ART["1"]["estendida_har"])),
+       ("1 dia", "Persistência", fmt(ART["1"]["original_persist"]), fmt(ART["1"]["estendida_persist"])),
+       ("21 dias", "HAR-RV", fmt(ART["21"]["original_har"]), fmt(ART["21"]["estendida_har"])),
+       ("21 dias", "Persistência", fmt(ART["21"]["original_persist"]), fmt(ART["21"]["estendida_persist"]))],
+      widths=[1.3, 1.7, 1.8, 1.8], highlight={2, 3})
+
+p("Em 21 dias o HAR-RV sai de R² negativo para fortemente positivo. Seria o resultado que "
+  "resgataria o projeto — se fosse real. Não é, e a prova está na própria tabela: a "
+  "persistência, que não tem um único parâmetro e portanto não pode ter aprendido nada, "
+  "salta junto e na mesma magnitude.")
+
+p("O mecanismo é o denominador. O R² mede erro contra a variância do alvo em torno da média "
+  "da própria amostra. Uma amostra que atravessa regimes de volatilidade muito diferentes "
+  "(2018-19, o choque de 2020, 2021-22 e 2023-26) tem variância total muito maior, e qualquer "
+  "previsão razoável parece melhor contra esse denominador inflado. Dois testes adicionais "
+  "confirmam: fixando o período de teste e variando apenas o treino, oito anos e meio de dados "
+  "contra um só melhoram o RMSE em 1,4% e o R² permanece negativo; e a autocorrelação de cada "
+  "subperíodo isolado é menor que a da amostra completa.")
+
+callout("Critério que passou a valer.",
+        "Neste conjunto de dados, R² e testes calculados sobre a amostra agrupada não são "
+        "evidência primária confiável — a mistura de regimes os infla sistematicamente. Cinco "
+        "achados aparentes desta fase morreram exatamente assim. O resultado por subperíodo "
+        "passou a ser o principal, e o agregado, contexto.", cor=RED)
+
+ACF = R["autocorrelacao_subperiodo"]
+linhas_acf = [("Amostra completa", *[num(x, 3) for x in ACF["completa"]])]
+linhas_acf += [(k, *[num(x, 3) for x in v]) for k, v in ACF["por_subperiodo"].items()]
+table(["Janela"] + [f"lag {l}" for l in ACF["lags"]], linhas_acf,
+      widths=[1.7, 1.1, 1.1, 1.1, 1.1], highlight={0})
+
+p("A autocorrelação da amostra completa é maior que a de qualquer subperíodo isolado — "
+  "assinatura de artefato de agregação, não de memória. E em defasagem de 21 dias nenhum "
+  "subperíodo passa de valores próximos de zero, que é precisamente o diagnóstico da Seção 5.7.")
+
+h2("6.7 Volatilidade implícita própria, a partir de negócios reais")
+
+IV = R["iv_propria"]
+if IV.get("disponivel"):
+    p("A Seção 7.1 registra a ausência de histórico de IV como a limitação mais séria do projeto. "
+      "Ela foi parcialmente superada — por um caminho diferente do previsto originalmente.")
+    p("O plano inicial era inverter Black-76 a partir dos preços de ajuste das opções. Esse "
+      "caminho está fechado: verificamos em 2019, 2022 e 2026 que a B3 lista milhares de séries "
+      "de opção de dólar e publica preço de ajuste para nenhuma delas. Não é mudança recente; é "
+      "prática estrutural.")
+    p(f"O que funcionou foi inverter sobre o preço efetivamente NEGOCIADO. O resultado são "
+      f"{num(IV['n_negocios'],0)} negócios em {IV['n_pregoes_com_iv']} pregões com IV válida, "
+      f"cobrindo {IV['periodo'][0]} a {IV['periodo'][1]} — a primeira série histórica de "
+      f"volatilidade implícita própria do projeto.")
+
+    PR = IV["premio"]
+    p("A consequência mais direta é sobre o backtest. A Seção 6.4 assume um prêmio de risco "
+      f"constante de 1,29, calibrado no único dia de superfície disponível. Medido agora contra "
+      f"a volatilidade efetivamente realizada, o prêmio é de {num(PR['iv_over_forward'],3)} "
+      f"(ou {num(PR['iv_over_trailing'],3)} contra a RV passada), com a implícita acima da "
+      f"realizada em apenas {num(100*PR['share_iv_acima'],0)}% dos dias. A calibragem de um dia "
+      "superestimava o prêmio de forma relevante.")
+
+    AV = IV["avaliacao"]["independente"]
+    p(f"Testamos também se a IV do mercado seria um previsor melhor da RV futura do que os nossos "
+      f"modelos. Com {AV['n']} janelas independentes, ela NÃO é: R² de "
+      f"{fmt(AV['iv']['r2_oos'])} contra {fmt(AV['persistencia']['r2_oos'])} da persistência. "
+      f"A correlação com a RV futura é substancial ({num(AV['corr_iv_rv'],3)}), mas a IV é "
+      "enviesada como previsão pontual — o achado clássico de Christensen & Prabhala (1998).")
+
+    callout("Registro de um falso positivo.",
+            "Com apenas o bloco denso de 2018 (6 janelas independentes) a IV aparecia muito "
+            "superior aos nossos modelos, e chegamos a tratar isso como inversão da premissa do "
+            "projeto. Com a amostra completa o resultado se inverteu. Foi o quarto falso positivo "
+            "capturado antes de virar afirmação.", cor=AMBER)
+
+h2("6.8 Machine learning: gradient boosting não supera o HAR-RV")
+
+ML = R["ml"]
+p("A Seção 8.3 desta versão listava modelos de maior capacidade como escopo descartado "
+  "conscientemente, sob o argumento de que seriam capacidade adicional onde não há sinal. O "
+  "argumento foi testado e virou medição.")
+p("O desenho segue Christensen, Siggaard & Veliyev (2023), que obtêm ganhos de ML sobre a "
+  "linhagem HAR usando apenas as defasagens diária, semanal e mensal como preditores e com "
+  "ajuste mínimo de hiperparâmetros. Mantivemos as features idênticas às do HAR — isolando a "
+  "forma funcional como única variável — e hiperparâmetros fixos, pré-registrados, sem busca em "
+  "grade, o que também evita inflar o contador do Deflated Sharpe. Testamos dois "
+  "base learners, de árvore e linear, seguindo Teller, Pigorsch & Pigorsch.")
+
+table(["Horizonte", "HAR-RV", "XGBoost linear", "XGBoost árvore", "Persistência"],
+      [(f"{h} dia(s)", fmt(ML[h]["har"]), fmt(ML[h]["xgb_linear"]),
+        fmt(ML[h]["xgb_arvore"]), fmt(ML[h]["persistencia"])) for h in ("1", "5", "21")],
+      widths=[1.2, 1.4, 1.5, 1.5, 1.5], highlight={2})
+
+p("O HAR-RV linear vence em todos os horizontes a partir de três dias. Mais informativo que o "
+  "veredito é o padrão: a distância do XGBoost de árvore para o HAR cresce monotonicamente com "
+  "o horizonte, acompanhando a queda do número de observações independentes de cerca de 1.760 "
+  "em um dia para cerca de 101 em vinte e um. Capacidade adicional não se paga onde não há "
+  "amostra que a sustente.")
+
+p("Isso contraria o resultado de Christensen et al., que encontram ganhos maiores justamente nos "
+  "horizontes longos — e a diferença de contexto explica: aquele trabalho usa um painel de "
+  "constituintes do Dow Jones com variância realizada intradiária, dezenas de milhares de "
+  "observações. Aqui há um ativo, com variância estimada de OHLC diário.")
+
+h2("6.9 Estimadores de variância: a hipótese de ruído de medição")
+
+EST = R["estimadores"]["r2"]
+p("O diagnóstico da Seção 5.7 aponta ruído de medição como explicação candidata para a ausência "
+  "de memória longa. Até esta fase o projeto usava apenas o estimador de Parkinson, que emprega "
+  "somente máxima e mínima e assume ausência de tendência — suposição desconfortável para um "
+  "ativo cujo preço de ajuste vai de cerca de 3.150 a 6.220 no período.")
+
+p("Foram implementados e avaliados Garman-Klass (1980), Rogers-Satchell (1991, que tolera "
+  "tendência), a variância de 24 horas incluindo o salto noturno, e Yang-Zhang (2000). A "
+  "comparação exige cuidado: usar como alvo a variância medida por um dos candidatos favorece "
+  "esse candidato por construção. Adotamos como árbitro a variância close-to-close futura, "
+  "ruidosa porém não enviesada e independente do erro de medição dos estimadores de amplitude.")
+
+table(["Estimador", "h = 1", "h = 5", "h = 21"],
+      [(nome, fmt(EST[chave]["1"]), fmt(EST[chave]["5"]), fmt(EST[chave]["21"]))
+       for chave, nome in [("parkinson", "Parkinson (adotado)"),
+                           ("garman_klass", "Garman-Klass"),
+                           ("rogers_satchell", "Rogers-Satchell"),
+                           ("full_day", "24 horas (com salto noturno)")]],
+      widths=[2.3, 1.3, 1.3, 1.3], highlight={2})
+
+p("Rogers-Satchell supera o Parkinson em horizonte curto, e é justamente o único dos três que "
+  "não assume tendência nula — teoria e resultado coincidem. O ganho é modesto e não atravessa "
+  "o critério de consistência entre subperíodos que passamos a exigir, mas a direção é "
+  "sistemática e o teste formal de Diebold-Mariano, com as 1.760 observações independentes "
+  "disponíveis em horizonte de um dia, é o sinal estatístico mais forte produzido no projeto.")
+
+callout("O que esta investigação fecha.",
+        "Nenhum estimador restaura autocorrelação em defasagem de 21 dias, em nenhum "
+        "subperíodo. Isso elimina o ruído de medição como explicação para o fracasso no "
+        "horizonte da estratégia. Somado aos testes de modelo, de features e de amostra, o "
+        "diagnóstico de descasamento de horizonte fica sem hipótese alternativa viva.", cor=RED)
+
 pagebreak()
 
 # =====================================================================
@@ -1283,7 +1433,20 @@ h2("7.1 Ausência de histórico de volatilidade implícita")
 
 p("É a limitação mais séria, e ela é estrutural, não uma falha de execução. A B3 sobrescreve o "
   "arquivo da superfície de volatilidade diariamente. A tese central do VolBoy — comparar RV "
-  "prevista contra IV de mercado — não pode ser validada historicamente sem essa série.")
+  "prevista contra IV de mercado — não pode ser validada historicamente a partir dessa fonte.")
+
+if R.get("iv_propria", {}).get("disponivel"):
+    _iv = R["iv_propria"]
+    p("Esta limitação foi PARCIALMENTE SUPERADA depois da primeira versão deste relatório, por um "
+      f"caminho alternativo descrito na Seção 6.7: invertendo Black-76 sobre preços efetivamente "
+      f"negociados, reconstruímos {num(_iv['n_negocios'],0)} observações de volatilidade "
+      f"implícita em {_iv['n_pregoes_com_iv']} pregões, cobrindo {_iv['periodo'][0]} a "
+      f"{_iv['periodo'][1]}.")
+    p("A limitação permanece real, porém, e em três frentes: a série é esparsa e ruidosa, porque "
+      "vem de poucos negócios por pregão; a cobertura é boa nos anos antigos e péssima nos "
+      "recentes, justamente o período da amostra principal; e a superfície completa por delta e "
+      "vencimento continua indisponível. A validação histórica da tese ficou possível em parte "
+      "do período, não em todo ele.")
 
 h2("7.2 O mercado de opções de dólar é ilíquido no nível de série")
 
@@ -1426,9 +1589,10 @@ bullets([
 h3("Escopo descartado conscientemente")
 
 bullets([
-    ("Modelos mais complexos. ", "Gradient boosting ou redes neurais seriam adicionar capacidade "
-     "onde já demonstramos ausência de sinal — aumentaria o risco de sobreajuste sem endereçar o "
-     "diagnóstico."),
+    ("Modelos mais complexos — testado, ver Seção 6.8. ", "Gradient boosting foi avaliado com "
+     "hiperparâmetros pré-registrados e dois base learners: o HAR-RV linear vence em todos os "
+     "horizontes a partir de três dias, e a desvantagem do modelo de maior capacidade cresce "
+     "conforme caem as observações independentes. O que era argumento passou a ser medição."),
     ("Tier 2 e 3 da camada de credibilidade. ", "Classificador hawkish/dovish, θ como estado "
      "latente, momentos implícitos BKM. Interessantes conceitualmente, mas o Tier 1 já não "
      "mostrou sinal — não há razão para sofisticar a camada antes de haver evidência de que ela "
