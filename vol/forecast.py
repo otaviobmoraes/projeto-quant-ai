@@ -249,23 +249,46 @@ def predict(model, data: pd.DataFrame, feature_cols: list[str], log_target: bool
     return pred.rename("rv_forecast")
 
 
+def forecast_metrics(pred: pd.Series | np.ndarray, target: pd.Series | np.ndarray) -> dict:
+    """RMSE/MAE/R2/vies a partir de uma previsao ja calculada, sempre na escala
+    ORIGINAL de RV (pontos percentuais).
+
+    Existe para garantir que TODA comparacao do projeto use exatamente a mesma
+    aritmetica: `evaluate` (modelo HAR), `evaluate_persistence` (baseline sem
+    parametro) e a previsao livre de escala passam por aqui. Com metricas
+    calculadas em lugares diferentes, uma diferenca de convencao viraria
+    "achado" -- risco real neste projeto, onde a comparacao entre modelos e o
+    resultado principal.
+
+    `vies_pct` e a razao entre a media prevista e a media realizada, em %.
+    Adicionado porque o R2 NAO detecta erro sistematico de nivel: um viés
+    constante de -7% mal move o R2 (medido: 0.3810 -> 0.3809) mas desloca
+    quase 9 pontos percentuais dos dias para o lado VENDIDO da regra de
+    sinal, que compara RV_prevista com IV.
+    """
+    pred = np.asarray(pred, dtype=float)
+    target = np.asarray(target, dtype=float)
+    err = target - pred
+    ss_res = float((err**2).sum())
+    ss_tot = float(((target - target.mean()) ** 2).sum())
+    media_real = float(target.mean())
+    return {
+        "rmse": float(np.sqrt((err**2).mean())),
+        "mae": float(np.abs(err).mean()),
+        "r2_oos": 1 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
+        "vies_pct": (
+            (float(pred.mean()) / media_real - 1) * 100 if media_real != 0 else float("nan")
+        ),
+    }
+
+
 def evaluate(model, test: pd.DataFrame, feature_cols: list[str], log_target: bool = False) -> dict:
     """Avalia RMSE/MAE/R2 fora da amostra, sempre na escala original de RV
     (se `log_target=True`, desfaz o log da previsao com exp antes de comparar)
     -- assim os resultados sao comparaveis entre as duas parametrizacoes.
     """
-    X_test = sm.add_constant(test[feature_cols], has_constant="add")
-    pred = model.predict(X_test)
-    if log_target:
-        pred = np.exp(pred)
-    err = test["target"].to_numpy() - pred.to_numpy()
-    ss_res = float((err**2).sum())
-    ss_tot = float(((test["target"] - test["target"].mean()) ** 2).sum())
-    return {
-        "rmse": float(np.sqrt((err**2).mean())),
-        "mae": float(np.abs(err).mean()),
-        "r2_oos": 1 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
-    }
+    pred = predict(model, test, feature_cols, log_target=log_target)
+    return forecast_metrics(pred, test["target"])
 
 
 def persistence_forecast(dataset: pd.DataFrame) -> pd.Series:
@@ -285,15 +308,118 @@ def persistence_forecast(dataset: pd.DataFrame) -> pd.Series:
 def evaluate_persistence(dataset: pd.DataFrame) -> dict:
     """RMSE/MAE/R2 do baseline de persistencia (sem ajuste de modelo) no
     mesmo `dataset` (tipicamente um fold de teste)."""
-    pred = persistence_forecast(dataset)
-    err = dataset["target"].to_numpy() - pred.to_numpy()
-    ss_res = float((err**2).sum())
-    ss_tot = float(((dataset["target"] - dataset["target"].mean()) ** 2).sum())
-    return {
-        "rmse": float(np.sqrt((err**2).mean())),
-        "mae": float(np.abs(err).mean()),
-        "r2_oos": 1 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
-    }
+    return forecast_metrics(persistence_forecast(dataset), dataset["target"])
+
+
+# ---------------------------------------------------------------------------
+# Previsao LIVRE DE ESCALA (alvo em razao)
+# ---------------------------------------------------------------------------
+#
+# MOTIVACAO (medida, nao teorica). O HAR em nivel tem viés de nivel que TROCA
+# DE SINAL entre folds: -8.15%, -9.27%, +1.53%, +11.38%, +11.02% (h=21,
+# Parkinson, futuro B3, 5 folds purgados). O treino e de janela EXPANSIVA,
+# entao o modelo carrega a media de regimes antigos: sub-preve em 2019-2020
+# (vol alta) e sobre-preve em 2023-2026 (vol baixa). Na janela em que o
+# backtest opera o viés agregado e -7.03%, contra um premio de risco medido de
+# +7.9% -- ou seja, o erro de nivel do modelo e da ORDEM do premio que a
+# estrategia tenta capturar, e empurra o sinal para o lado vendido.
+#
+# A correcao aqui e estrutural, nao um ajuste: prever a RAZAO entre a RV
+# futura e a RV corrente em vez do NIVEL da RV futura. O nivel entra so pela
+# multiplicacao de volta pela persistencia, que por construcao acompanha o
+# regime. Em forma logaritmica isso e o log-HAR com o coeficiente do
+# componente mensal RESTRITO a 1 -- e uma restricao, entao reduz variancia de
+# estimacao ao custo de vies se a restricao for falsa, exatamente o
+# trade-off que a literatura de quebra estrutural recomenda quando os
+# parametros derivam no tempo (Pesaran & Timmermann, 2007; Inoue & Jin, 2017).
+#
+# Efeito colateral que importa para o relatorio: com alvo em razao, o R2 passa
+# a ser calculado sobre uma serie estacionaria, e nao sobre uma serie cujo
+# ss_tot cresce com a heterogeneidade de regime da janela (armadilha 4 do
+# CLAUDE.md). Isso ataca na raiz o padrao "estatistica agregada produz achado
+# que o subperiodo mata", registrado 5 vezes neste projeto.
+
+SCALE_FREE_FEATURES = ["ratio_d", "ratio_w"]
+
+
+def scale_free_features(dataset: pd.DataFrame) -> pd.DataFrame:
+    """Features livres de escala: a variancia diaria e a semanal DIVIDIDAS
+    pela mensal (rv_d/rv_m, rv_w/rv_m).
+
+    Sao razoes em NIVEL, nao em log, de proposito: rv_m e uma media de 22 dias
+    e nunca e zero, mas rv_d pode ser (um pregao sem range no futuro da B3
+    daria Parkinson = 0), e log(0) contaminaria a linha. Verificado na amostra
+    atual: 0 de 2.135 pregoes tem variancia nula -- a escolha e por robustez,
+    nao por necessidade presente.
+
+    O que essas features codificam e a FORMA da estrutura a termo de vol
+    (curto acima ou abaixo do medio prazo), que e o que se espera ser estavel
+    entre regimes -- e nao o NIVEL, que nao e.
+    """
+    out = pd.DataFrame(index=dataset.index)
+    out["ratio_d"] = dataset["rv_d"] / dataset["rv_m"]
+    out["ratio_w"] = dataset["rv_w"] / dataset["rv_m"]
+    return out
+
+
+def build_scale_free_dataset(dataset: pd.DataFrame) -> pd.DataFrame:
+    """Converte um dataset HAR padrao (rv_d/rv_w/rv_m + target em nivel) no
+    dataset livre de escala: features de razao + `target_ratio` (RV futura /
+    RV corrente) + as colunas originais preservadas.
+
+    `target` (nivel) e mantido de proposito: e nele que a avaliacao final
+    acontece, para que o R2 seja comparavel ao do baseline (mesmo alvo, mesmo
+    denominador -- armadilha 4).
+    """
+    out = dataset.copy()
+    trailing = persistence_forecast(dataset)
+    out["rv_trailing"] = trailing
+    out["target_ratio"] = dataset["target"] / trailing
+    out[SCALE_FREE_FEATURES] = scale_free_features(dataset)
+    out = out.replace([np.inf, -np.inf], np.nan).dropna()
+    # target_ratio == 0 e finito, entao passa pelo filtro de inf acima, mas
+    # quebra o log do ajuste. Acontece quando a variancia realizada do
+    # horizonte inteiro e zero -- possivel em h=1 num pregao sem range
+    # (high == low). Nao e observacao utilizavel num modelo multiplicativo.
+    return out[out["target_ratio"] > 0]
+
+
+def fit_har_scale_free(train: pd.DataFrame, feature_cols: list[str] | None = None):
+    """Ajusta o HAR livre de escala por OLS em log(RV_futura / RV_corrente).
+
+    O log e obrigatorio aqui (nao opcional como em `fit_har`): a razao e
+    positiva e assimetrica, e e em log que ela fica aproximadamente simetrica
+    -- alem de garantir previsao de nivel sempre positiva ao desfazer.
+    """
+    feature_cols = feature_cols or SCALE_FREE_FEATURES
+    X = sm.add_constant(train[feature_cols], has_constant="add")
+    return sm.OLS(np.log(train["target_ratio"]), X).fit()
+
+
+def predict_scale_free(
+    model,
+    data: pd.DataFrame,
+    feature_cols: list[str] | None = None,
+    jensen_correction: bool = True,
+) -> pd.Series:
+    """Previsao de RV no NIVEL (pontos percentuais), comparavel ponto a ponto
+    com `vol.forecast.predict` -- multiplica a razao prevista pela RV corrente.
+
+    `jensen_correction=True` aplica exp(sigma^2/2) ao desfazer o log. MOTIVO:
+    o modelo estima E[log Y], e exp(E[log Y]) e a MEDIANA de Y, nao a media --
+    para uma variavel log-normal a media e exp(mu + sigma^2/2). Sem isso a
+    previsao de nivel sai sistematicamente BAIXA. Medido neste dataset: fator
+    1.0210, ou seja -2.1% de viés embutido, o que e 27% do tamanho do premio
+    de risco (1.079) que a estrategia tenta capturar. O `predict` em log do
+    projeto tem esse viés desde sempre.
+
+    sigma^2 vem do residuo de TREINO (`model.mse_resid`), nunca do teste.
+    """
+    feature_cols = feature_cols or SCALE_FREE_FEATURES
+    X = sm.add_constant(data[feature_cols], has_constant="add")
+    log_ratio = model.predict(X)
+    fator = np.exp(model.mse_resid / 2.0) if jensen_correction else 1.0
+    return (np.exp(log_ratio) * fator * data["rv_trailing"]).rename("rv_forecast")
 
 
 def run_ablation(

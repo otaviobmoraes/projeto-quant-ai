@@ -21,15 +21,14 @@ Tudo o resto do trade usa dado 100% real:
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
+from backtest.costs import FUTURES_SPREAD_PCT, futures_hedge_cost, transaction_cost
 from backtest.metrics import directional_accuracy, sharpe_ratio
 from backtest.walk_forward import purged_walk_forward_splits
-from backtest.costs import transaction_cost
 from strategy.signal import LONG_VOL, NO_TRADE, generate_signal
 from strategy.sizing import size_straddle
-from vol.black76 import call_price, put_price
+from vol.black76 import call_price, put_price, straddle_delta
 from vol.forecast import TRADING_DAYS_PER_YEAR, fit_har, persistence_forecast, predict
 
 
@@ -275,6 +274,180 @@ def run_backtest(
         # nao sobrepoe trades: proximo trade so depois deste expirar.
         next_idx = common_index.searchsorted(exit_date)
         i = max(next_idx, i + 1)
+
+    return pd.DataFrame(records)
+
+
+def run_backtest_delta_hedged(
+    prices: pd.Series,
+    rv_forecast: pd.Series,
+    iv_proxy_series: pd.Series,
+    horizon: int = 21,
+    band_pct: float = 1.0,
+    target_vega: float = 1000.0,
+    spread_pct: float = 0.05,
+    futures_spread_pct: float = FUTURES_SPREAD_PCT,
+    rebalance_every: int = 1,
+    r: float = 0.0,
+    n_contracts_series: pd.Series | None = None,
+    allow_overlap: bool = False,
+) -> pd.DataFrame:
+    """Mesma estrategia de `run_backtest`, mas com DELTA-HEDGE do straddle
+    contra o futuro ate o vencimento.
+
+    `n_contracts_series`: se informado, usa o tamanho de posicao dessa serie
+    (indexada por data de entrada) em vez do dimensionamento por VEGA
+    constante. E o gancho para dimensionamento por RISCO
+    (`strategy.sizing.size_by_risk_target`) sem misturar a logica de sizing
+    dentro do motor. Datas ausentes na serie caem no vega constante.
+
+    `allow_overlap=True`: abre operacao em TODA data com sinal, em vez de
+    esperar a anterior vencer. Multiplica o numero de trades (40 -> ~200 na
+    janela de IV real) e, mais importante, elimina a arbitrariedade de QUAIS
+    datas de inicio entram na amostra -- este projeto ja mediu que essa
+    escolha sozinha movia um R2 em mais de um ponto inteiro.
+    *** O P&L resultante NAO e uma serie de observacoes independentes: trades
+    vizinhos compartilham quase todos os dias, e a serie tem estrutura
+    aproximada de MA(horizon-1). Sharpe pontual pode ser lido normalmente, mas
+    QUALQUER erro padrao, p-valor ou intervalo tem de vir de
+    `backtest.bootstrap` (HAC + bootstrap de bloco). Usar o desvio-padrao
+    ingenuo aqui e a armadilha nº 2 do projeto. ***
+
+    POR QUE ISSO MUDA A NATUREZA DO BACKTEST (e nao e um ajuste de parametro):
+    sem hedge, o resultado do straddle e |S_T - K| contra o premio -- depende
+    de UMA realizacao do preco terminal. Isso mede direcao mais ruido, nao
+    exposicao a volatilidade: o modelo preve o NIVEL de vol dos proximos 21
+    dias, mas o P&L pergunta "onde o dolar parou no dia 21". Sao perguntas
+    diferentes, e a segunda tem variancia muito maior. A assinatura disso no
+    backtest sem hedge esta registrada: assimetria -1,60, poucas perdas grandes
+    dominando, e o Sharpe trocando de sinal conforme a banda morta.
+
+    Com rebalanceamento delta-neutro o P&L converge para aproximadamente
+
+        integral de 1/2 * Gamma_t * F_t^2 * (IV^2 - RV_t^2) dt   (posicao vendida)
+
+    isto e, EXATAMENTE o spread que a estrategia diz operar, acumulado ao longo
+    do periodo inteiro em vez de amostrado num unico ponto terminal. E reducao
+    de variancia por especificacao correta, nao por escolha de parametro --
+    tanto que o CLAUDE.md ja exigia ("isolar exposicao a vol via delta-hedge").
+
+    CONVENCOES DECLARADAS:
+    - HEDGE NA VOL IMPLICITA DE ENTRADA. O delta e recalculado todo dia com o F
+      do dia e o prazo restante, mas sempre com a sigma negociada na abertura.
+      E a pratica padrao (hedging at implied) e a unica possivel aqui: nao ha
+      serie diaria de IV cobrindo a vida inteira de cada trade. Consequencia
+      conhecida: o P&L total fica correto em media, mas o CAMINHO depende de a
+      vol realizada divergir da implicita -- que e o que se quer medir.
+    - PRAZO EM DIAS CORRIDOS (T = dias/365) com `horizon` contado em dias
+      UTEIS: a mesma convencao (imprecisa, porem consistente) de
+      `run_backtest`. Mantida de proposito para os dois backtests serem
+      comparaveis; troca-la aqui misturaria o efeito do hedge com o efeito da
+      convencao de prazo.
+    - O ultimo rebalanceamento ocorre com 1 dia util restante; nao se hedgeia
+      NO vencimento, onde o delta e descontinuo no strike.
+
+    `rebalance_every`: 1 = hedge diario. Valores maiores hedgeiam com menos
+    frequencia -- mais erro de replicacao, menos custo de spread.
+    """
+    if rebalance_every < 1:
+        raise ValueError("rebalance_every precisa ser >= 1")
+
+    common_index = prices.index.intersection(rv_forecast.index).intersection(iv_proxy_series.index)
+    common_index = common_index.sort_values()
+
+    records = []
+    i = 0
+    n = len(common_index)
+    while i < n:
+        t = common_index[i]
+        rv_hat = rv_forecast.loc[t]
+        iv_t = iv_proxy_series.loc[t]
+        if pd.isna(rv_hat) or pd.isna(iv_t) or iv_t <= 0:
+            i += 1
+            continue
+
+        sig = generate_signal(rv_hat, iv_t, band_pct=band_pct)
+        if sig == NO_TRADE:
+            i += 1
+            continue
+
+        pos_in_prices = prices.index.get_loc(t)
+        exit_pos = pos_in_prices + horizon
+        if exit_pos >= len(prices):
+            break  # sem dado suficiente pra resolver o trade ate o fim
+        exit_date = prices.index[exit_pos]
+
+        spot_entry = float(prices.loc[t])
+        K = spot_entry
+        sigma = iv_t / 100
+        T = horizon / 365
+        premium = call_price(spot_entry, K, T, sigma, r) + put_price(spot_entry, K, T, sigma, r)
+        n_contracts = size_straddle(
+            target_vega=target_vega, spot=spot_entry, ttm_days=horizon, iv_pct=iv_t, r=r
+        )
+        if n_contracts_series is not None and t in n_contracts_series.index:
+            tamanho = n_contracts_series.loc[t]
+            if pd.notna(tamanho) and tamanho > 0:
+                n_contracts = float(tamanho)
+        direction = 1 if sig == LONG_VOL else -1
+
+        # --- delta-hedge dia a dia ate o vencimento -------------------------
+        pnl_hedge = 0.0
+        hedge_cost = 0.0
+        hedge_pos = 0.0  # contratos de futuro em carteira (positivo = comprado)
+        n_rebalances = 0
+        for step in range(horizon):
+            dias_restantes = horizon - step
+            F_now = float(prices.iloc[pos_in_prices + step])
+            F_next = float(prices.iloc[pos_in_prices + step + 1])
+
+            if step % rebalance_every == 0:
+                delta_straddle = straddle_delta(F_now, K, dias_restantes / 365, sigma, r)
+                # posicao de futuro que zera o delta da carteira de opcoes
+                alvo = -direction * n_contracts * delta_straddle
+                hedge_cost += futures_hedge_cost(alvo - hedge_pos, F_now, futures_spread_pct)
+                hedge_pos = alvo
+                n_rebalances += 1
+
+            pnl_hedge += hedge_pos * (F_next - F_now)
+
+        spot_exit = float(prices.loc[exit_date])
+        # zera o hedge no vencimento (paga spread na saida)
+        hedge_cost += futures_hedge_cost(-hedge_pos, spot_exit, futures_spread_pct)
+
+        payoff = abs(spot_exit - K)
+        option_cost = transaction_cost(premium, n_contracts, spread_pct)
+
+        pnl_option = direction * n_contracts * (payoff - premium)
+        pnl_gross = pnl_option + pnl_hedge
+        pnl_net = pnl_gross - option_cost - hedge_cost
+
+        records.append(
+            {
+                "entry_date": t,
+                "exit_date": exit_date,
+                "signal": sig,
+                "rv_forecast": rv_hat,
+                "iv_proxy": iv_t,
+                "n_contracts": n_contracts,
+                "premium": premium,
+                "payoff": payoff,
+                "pnl_option": pnl_option,
+                "pnl_hedge": pnl_hedge,
+                "n_rebalances": n_rebalances,
+                "cost": option_cost + hedge_cost,
+                "hedge_cost": hedge_cost,
+                "pnl_gross": pnl_gross,
+                "pnl_net": pnl_net,
+            }
+        )
+
+        if allow_overlap:
+            i += 1
+        else:
+            # nao sobrepoe trades: proximo trade so depois deste expirar.
+            next_idx = common_index.searchsorted(exit_date)
+            i = max(next_idx, i + 1)
 
     return pd.DataFrame(records)
 

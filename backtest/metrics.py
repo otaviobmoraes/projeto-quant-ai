@@ -114,6 +114,55 @@ def pooled_oos_metrics(actual: pd.Series, predicted: pd.Series) -> dict:
     }
 
 
+def diebold_mariano(
+    actual: pd.Series,
+    pred_a: pd.Series,
+    pred_b: pd.Series,
+    horizon: int = 1,
+    independent_only: bool = False,
+) -> dict:
+    """Teste de Diebold-Mariano (1995) -- H0: os dois modelos tem a MESMA
+    acuracia preditiva. Perda quadratica; `pred_a` e a candidata e `pred_b` a
+    referencia, entao t POSITIVO significa que A erra MENOS que B.
+
+    E o TERCEIRO PORTAO do criterio do projeto (delta R2 > 0, >=4/5 folds,
+    DM p < 0.05) e ate agora era calculado ad-hoc em script, o que abre espaco
+    para inconsistencia entre analises. Aqui fica uma implementacao unica.
+
+    `independent_only=True` subamostra 1 observacao a cada `horizon` para que
+    as janelas do alvo NAO se sobreponham. E a diferenca que este projeto ja
+    mediu valer um veredito: com janelas sobrepostas os MESMOS dados deram
+    p=0.2166 onde a versao independente deu p=0.9531, porque observacoes
+    vizinhas compartilham quase todos os retornos e inflam o n efetivo. Em
+    h=1 as duas versoes coincidem (o alvo nao se sobrepoe).
+
+    Sem correcao HAC: a subamostragem independente ja remove a autocorrelacao
+    que a correcao trataria, e e o caminho mais transparente de auditar.
+    """
+    df = pd.concat(
+        [actual.rename("y"), pred_a.rename("a"), pred_b.rename("b")], axis=1, join="inner"
+    ).dropna()
+    if independent_only and horizon > 1:
+        df = df.iloc[::horizon]
+
+    d = ((df["y"] - df["a"]) ** 2 - (df["y"] - df["b"]) ** 2).to_numpy()
+    n = int(d.size)
+    if n < 3:
+        return {
+            "n": n, "t_stat": float("nan"), "p_value": float("nan"), "media_perda": float("nan")
+        }
+
+    desvio = float(np.std(d, ddof=1))
+    if desvio == 0:
+        return {"n": n, "t_stat": 0.0, "p_value": 1.0, "media_perda": 0.0}
+
+    # d < 0 significa que A tem perda menor. Invertemos o sinal para que
+    # t POSITIVO signifique "A e melhor", que e como o projeto le o resultado.
+    t_stat = -float(np.mean(d)) / (desvio / np.sqrt(n))
+    p_value = float(2 * stats.t.sf(abs(t_stat), df=n - 1))
+    return {"n": n, "t_stat": t_stat, "p_value": p_value, "media_perda": float(np.mean(d))}
+
+
 def directional_accuracy(forecast: pd.Series, actual: pd.Series, reference: pd.Series) -> dict:
     """O modelo "acerta" se prever corretamente de que lado de `reference` o
     valor `actual` vai cair -- ex.: reference = RV atual (persistencia) ou

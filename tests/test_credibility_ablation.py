@@ -36,8 +36,8 @@ def test_run_credibility_ablation_structure():
     result = ablation.run_credibility_ablation(prices, credibility_df, horizon=21, n_splits=4, embargo_days=5)
 
     assert "per_fold" in result
-    assert set(result["baseline"]) == {"rmse", "mae", "r2_oos"}
-    assert set(result["com_credibilidade"]) == {"rmse", "mae", "r2_oos"}
+    assert set(result["baseline"]) == {"rmse", "mae", "r2_oos", "vies_pct"}
+    assert set(result["com_credibilidade"]) == {"rmse", "mae", "r2_oos", "vies_pct"}
     assert set(result["baseline_pooled"]) == {"rmse", "mae", "r2_oos", "n_obs"}
     assert "com_credibilidade_pooled" in result
 

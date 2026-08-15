@@ -57,6 +57,49 @@ def straddle_vega(F: float, K: float, T: float, sigma: float, r: float = 0.0) ->
     return 2 * vega(F, K, T, sigma, r)
 
 
+def call_delta(F: float, K: float, T: float, sigma: float, r: float = 0.0) -> float:
+    """Delta da call em relacao ao FUTURO (dPremio/dF).
+
+    No Black-76 o delta traz o fator de desconto: a opcao liquida no
+    vencimento, entao mexer 1 unidade no futuro hoje vale exp(-rT) de premio.
+    Com o r=0.0 default isso e 1 e o delta vira simplesmente N(d1).
+    """
+    d1, _ = _d1_d2(F, K, T, sigma)
+    return _discount_factor(r, T) * norm.cdf(d1)
+
+
+def put_delta(F: float, K: float, T: float, sigma: float, r: float = 0.0) -> float:
+    """Delta da put em relacao ao futuro. Paridade: delta_call - delta_put =
+    exp(-rT), entao a put fica negativa como esperado."""
+    d1, _ = _d1_d2(F, K, T, sigma)
+    return _discount_factor(r, T) * (norm.cdf(d1) - 1.0)
+
+
+def straddle_delta(F: float, K: float, T: float, sigma: float, r: float = 0.0) -> float:
+    """Delta do straddle (call + put no mesmo strike) = exp(-rT)*(2*N(d1) - 1).
+
+    Perto do dinheiro fica proximo de ZERO (as duas pernas se cancelam) -- e
+    por isso que o straddle e a estrutura natural pra operar NIVEL de vol. Mas
+    "proximo de zero" nao e zero: conforme F se afasta de K o delta cresce e a
+    posicao vira uma aposta direcional, que e exatamente o que o delta-hedge
+    de `backtest.engine.run_backtest_delta_hedged` remove.
+    """
+    return call_delta(F, K, T, sigma, r) + put_delta(F, K, T, sigma, r)
+
+
+def straddle_gamma(F: float, K: float, T: float, sigma: float, r: float = 0.0) -> float:
+    """Gamma do straddle (= 2x o gamma de uma perna, igual para call e put).
+
+    Usado so para diagnostico do backtest com hedge: o P&L de uma posicao
+    delta-neutra e aproximadamente a integral de 1/2 * Gamma * F^2 *
+    (RV^2 - IV^2) dt, entao o gamma e o peso com que cada dia entra no
+    resultado.
+    """
+    d1, _ = _d1_d2(F, K, T, sigma)
+    df = _discount_factor(r, T)
+    return 2 * df * norm.pdf(d1) / (F * sigma * T**0.5)
+
+
 def _discount_factor(r: float, T: float) -> float:
     return math.exp(-r * T)
 

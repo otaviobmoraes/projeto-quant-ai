@@ -25,7 +25,7 @@ def test_run_purged_ablation_structure():
 
     assert "per_fold" in result
     assert result["n_splits"] <= 4
-    assert set(result["baseline"]) == {"rmse", "mae", "r2_oos"}
+    assert set(result["baseline"]) == {"rmse", "mae", "r2_oos", "vies_pct"}
     assert set(result["baseline_pooled"]) == {"rmse", "mae", "r2_oos", "n_obs"}
     assert "com_noticia_pooled" in result
 
