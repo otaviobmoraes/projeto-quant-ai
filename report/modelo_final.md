@@ -25,29 +25,45 @@ escrita, então é a RV dele que a estratégia precisa prever.
 
 **Estimador de variância diária.** Parkinson (1980), sobre o range do pregão:
 
-$$RV_t \;=\; \frac{\ln(H_t/L_t)^2}{4\ln 2}$$
+```
+                ln(H_t / L_t)²
+      RV_t  =  ────────────────
+                   4 · ln(2)
+
+   H_t = máxima do pregão      L_t = mínima do pregão
+```
 
 Escolhido por medição, não por convenção: RMSE menor que o retorno de
 fechamento ao quadrado em todos os folds testados. Rogers-Satchell e
-Garman-Klass foram avaliados e ficam marginalmente à frente em h=1
-(DM p=0,0017 e p=0,0056), mas **não passam** no portão de consistência entre
-folds (2/5), então o baseline oficial segue Parkinson.
+Garman-Klass ficam marginalmente à frente em h=1 (DM p=0,0017 e p=0,0056), mas
+**não passam** no portão de consistência entre folds (2/5), então o baseline
+oficial segue Parkinson.
 
 **Componentes HAR** (Corsi, 2009) — médias móveis da variância diária:
 
-$$RV^{(d)}_t = RV_t \qquad
-  RV^{(w)}_t = \frac{1}{5}\sum_{i=0}^{4} RV_{t-i} \qquad
-  RV^{(m)}_t = \frac{1}{22}\sum_{i=0}^{21} RV_{t-i}$$
+```
+   RV_d(t)  =  RV_t                              (diário)
+
+                 1                                (semanal)
+   RV_w(t)  =  ───  ·  Σ RV_(t-i)   ,  i = 0..4
+                 5
+
+                 1                                (mensal)
+   RV_m(t)  =  ────  ·  Σ RV_(t-i)  ,  i = 0..21
+                 22
+```
 
 ---
 
 ## 3. As features: adimensionais, de propósito
 
-O modelo **não** usa `RV^(d)`, `RV^(w)`, `RV^(m)` em nível. Usa duas razões:
+O modelo **não** usa `RV_d`, `RV_w`, `RV_m` em nível. Usa duas razões:
 
-$$x_{1,t} = \frac{RV^{(d)}_t}{RV^{(m)}_t}
-\qquad
-x_{2,t} = \frac{RV^{(w)}_t}{RV^{(m)}_t}$$
+```
+              RV_d(t)                     RV_w(t)
+   x₁(t)  =  ─────────         x₂(t)  =  ─────────
+              RV_m(t)                     RV_m(t)
+```
 
 Elas codificam a **forma** da estrutura a termo de volatilidade (curto acima ou
 abaixo do médio prazo), e não o **nível**, que não é estacionário.
@@ -69,13 +85,24 @@ em toda avaliação.
 
 ## 4. O alvo: uma razão, não um nível
 
-$$y_{t,h} \;=\; \ln\!\left(\frac{RV^{\text{fut}}_{t,h}}{RV^{\text{corrente}}_t}\right)$$
+```
+                    ⎛  RV_futura(t,h)  ⎞
+   y(t,h)  =   ln   ⎜ ──────────────── ⎟
+                    ⎝  RV_corrente(t)  ⎠
+```
 
 onde ambos são volatilidades anualizadas em pontos percentuais:
 
-$$RV^{\text{fut}}_{t,h} = 100\sqrt{\tfrac{252}{h}\textstyle\sum_{i=1}^{h} RV_{t+i}}
-\qquad
-RV^{\text{corrente}}_t = 100\sqrt{252 \cdot RV^{(m)}_t}$$
+```
+                            ______________________
+                           ╱  252
+   RV_futura(t,h) = 100 · ╱  ─────  ·  Σ RV_(t+i)     ,  i = 1..h
+                        ╲╱      h
+
+                            _____________________
+   RV_corrente(t)  = 100 · ╱  252 · RV_m(t)
+                         ╲╱
+```
 
 Em forma logarítmica isso é o log-HAR com o coeficiente do componente mensal
 **restrito a 1** — uma restrição, portanto reduz variância de estimação ao
@@ -85,14 +112,22 @@ custo de viés se a restrição for falsa.
 
 ## 5. A equação estimada
 
-$$\boxed{\;\ln\!\left(\frac{RV^{\text{fut}}_{t,h}}{RV^{\text{corrente}}_t}\right)
-= \alpha + \beta_1 x_{1,t} + \beta_2 x_{2,t} + \varepsilon_t\;}$$
+```
+   ┌────────────────────────────────────────────────────────────┐
+   │                                                            │
+   │    ln( RV_futura(t,h) / RV_corrente(t) )                   │
+   │                                                            │
+   │              =   α  +  β₁ · x₁(t)  +  β₂ · x₂(t)  +  ε(t)  │
+   │                                                            │
+   └────────────────────────────────────────────────────────────┘
+```
 
-Ajuste por MQO. Coeficientes do último fold (treino de 2.097 pregões, h=5):
+Ajuste por mínimos quadrados. Coeficientes do último fold
+(treino de 2.097 pregões, h=5):
 
 | parâmetro | valor | t |
 |---|---|---|
-| α | −0,1959 | −13,53 |
+| α (intercepto) | −0,1959 | −13,53 |
 | β₁ (razão diária) | +0,0432 | +5,85 |
 | β₂ (razão semanal) | +0,1129 | +7,23 |
 
@@ -101,19 +136,20 @@ futura fica ~18% abaixo da corrente. β₁ e β₂ positivos dizem que vol de cu
 prazo acima da de médio prazo antecipa vol futura mais alta, e o componente
 semanal pesa ~2,6× mais que o diário (o diário é mais ruidoso).
 
-**Previsão, na escala de nível:**
+**Previsão, de volta à escala de nível:**
 
-$$\widehat{RV}_{t,h} \;=\; RV^{\text{corrente}}_t \cdot
-\exp\!\left(\hat\alpha + \hat\beta_1 x_{1,t} + \hat\beta_2 x_{2,t}\right)
-\cdot \underbrace{\exp\!\left(\hat\sigma^2/2\right)}_{\text{correção de Jensen}}$$
+```
+   RV_prevista(t,h) = RV_corrente(t) · exp( α + β₁·x₁ + β₂·x₂ ) · exp( σ² / 2 )
+                      └──── nível ────┘   └──── forma da reversão ────┘  └ Jensen ┘
+```
 
-O último fator não é cosmético: $\exp(\mathbb{E}[\ln Y])$ é a **mediana** de
-$Y$, não a média; para log-normal a média é $\exp(\mu + \sigma^2/2)$. Sem ele a
-previsão de nível sai sistematicamente baixa. Medido: fator 1,0322 em h=5
-($\hat\sigma^2 = 0{,}0634$). O `predict` em log do projeto omitia isso desde
+O último fator não é cosmético: `exp( E[ln Y] )` é a **mediana** de Y, não a
+média; para uma variável log-normal a média é `exp( μ + σ²/2 )`. Sem ele a
+previsão de nível sai sistematicamente baixa. Medido em h=5: σ² = 0,0634,
+logo o fator é **1,0322**. O `predict` em log do projeto omitia isso desde
 sempre.
 
-$\hat\sigma^2$ vem do resíduo de **treino**, nunca do teste.
+σ² vem do resíduo de **treino**, nunca do teste.
 
 ---
 
@@ -139,8 +175,7 @@ por isso é o modelo final.
 O que é consistente em **todo** horizonte e **todo** subperíodo é a calibragem:
 o |viés| médio cai de 6,52% para 1,59% e para de trocar de sinal.
 
-**Horizonte operacional: h = 5 dias úteis.** É onde o backtest tem o melhor
-resultado, e a razão é econômica, não estatística — ver seção 8.
+**Horizonte operacional: h = 5 dias úteis.**
 
 ---
 
@@ -156,16 +191,35 @@ acompanhando a queda de observações independentes de 1.760 para ~101.
 
 E o limite foi **medido**, não inferido por eliminação (`backtest/capacity.py`):
 
-- **Teto em amostra** — ajustando *e* avaliando no mesmo bloco, isto é com
-  permissão para colar, o R² é **3,77%** em h=21. Nenhum ajuste honesto supera
-  o teto de uma versão desonesta.
-- **Varredura de capacidade** — com regularização desligada, o R² **dentro** da
-  amostra vai de 0,524 a **0,9999** enquanto o de **fora** vai de −0,323 a
-  **−0,973**. O modelo memoriza perfeitamente e generaliza monotonicamente
-  pior: é a definição operacional de "não há sinal".
-- **Curva de aprendizado** — em h=21 não converge para nada útil. Em h=1 ainda
-  sobe (+0,0197 no último dobro de dados): é o único lugar do projeto onde
-  "mais dados ajudariam" é afirmação sustentada por medição.
+**Teto em amostra** — ajustando *e* avaliando no mesmo bloco, isto é com
+permissão para colar:
+
+```
+   h = 21  →  R² = 0,0377        h = 1  →  R² = 0,0481
+```
+
+Nenhum ajuste honesto supera o teto de uma versão desonesta.
+
+**Varredura de capacidade** — XGBoost com regularização desligada:
+
+```
+   capacidade          R² dentro     R² fora
+   ─────────────────────────────────────────
+   prof. 2,  100 árv.    +0,524      −0,323
+   prof. 4,  300 árv.    +0,750      −0,846
+   prof. 8,  600 árv.    +0,998      −0,924
+   prof. 12, 1500 árv.   +0,9999     −0,973
+                         ▲            ▲
+                    memoriza      generaliza
+                    perfeito       pior
+```
+
+Essa divergência é a definição operacional de "não há sinal": o gargalo não é
+capacidade de representação.
+
+**Curva de aprendizado** — em h=21 não converge para nada útil. Em h=1 ainda
+sobe (+0,0197 no último dobro de dados): é o único lugar do projeto onde
+"mais dados ajudariam" é afirmação sustentada por medição.
 
 Também testados e rejeitados: GARCH(1,1) (ganha em h=1, perde em h≥5), modelo
 global em painel de 8 moedas emergentes (reprova nos três portões), e todas as
@@ -176,48 +230,71 @@ credibilidade de Barro-Gordon via Focus/COPOM, risco global via VIX+DXY.
 
 ## 8. Como o modelo decide operar
 
-**Passo 1 — IV de mercado.** Invertida numericamente (Brent) de negócios reais
-de opção de dólar da B3 via **Black-76** (opção sobre futuro, não sobre spot):
+### Passo 1 — IV de mercado
 
-$$C = e^{-rT}\left[F\,N(d_1) - K\,N(d_2)\right], \qquad
-d_{1,2} = \frac{\ln(F/K) \pm \tfrac{1}{2}\sigma^2 T}{\sigma\sqrt{T}}$$
+Invertida numericamente (Brent) de negócios reais de opção de dólar da B3 via
+**Black-76** — opção sobre futuro, não sobre spot:
+
+```
+   C  =  exp(−r·T) · [ F · N(d₁)  −  K · N(d₂) ]
+
+            ln(F/K)  +  ½ · σ² · T
+   d₁  =  ──────────────────────────        d₂  =  d₁  −  σ·√T
+                  σ · √T
+
+   F = futuro     K = strike     T = prazo em anos     N = normal acumulada
+```
 
 Filtros de qualidade pré-fixados: ≥2 negócios na série, IV entre 4% e 60%,
 |moneyness| ≤ 3%, e **vencimento casado com o horizonte** (3–12 dias corridos
 para h=5).
 
-**Passo 2 — sinal.** Compara previsão com mercado, com banda morta:
+### Passo 2 — sinal
 
-$$s_t = \begin{cases}
-+1 \;(\text{compra vol}) & \text{se } \widehat{RV}_{t,h} - IV_t > b\\
--1 \;(\text{vende vol}) & \text{se } \widehat{RV}_{t,h} - IV_t < -b\\
-0 & \text{caso contrário}
-\end{cases}$$
+```
+   spread(t)  =  RV_prevista(t,h)  −  IV(t)
 
-A banda existe porque o spread da opção é largo; operar diferenças pequenas
-demais não paga o custo.
+                  ┌  +1   (compra vol)   se  spread >  b
+   sinal(t)  =    │   0   (fora)         se  |spread| ≤ b
+                  └  −1   (vende vol)    se  spread < −b
+```
 
-**Passo 3 — estrutura.** Straddle ATM sobre o futuro ($K = F_t$),
-dimensionado por vega alvo constante:
+A banda morta `b` existe porque o spread bid-ask da opção é largo; operar
+diferenças pequenas demais não paga o custo de execução.
 
-$$n_t = \frac{\text{vega alvo}}{\nu_{\text{straddle}}(F_t, K, T, \sigma)},
-\qquad \nu_{\text{straddle}} = 2\,e^{-rT} F\,\phi(d_1)\sqrt{T}$$
+### Passo 3 — estrutura e tamanho
 
-Existe também dimensionamento por **risco** constante
-(`size_by_risk_target`), que divide pela dispersão móvel da RV: não melhora o
-Sharpe (Harvey et al. 2018 já preveem isso para moedas) mas corta a perda
-máxima em 41% e o drawdown pela metade. Adotado por gestão de risco, não como
-melhora de retorno.
+Straddle ATM sobre o futuro (K = F_t), dimensionado por vega alvo constante:
 
-**Passo 4 — delta-hedge diário.** A posição é rebalanceada para delta-neutro
-todo pregão, na IV de entrada:
+```
+                    vega_alvo
+   n_contratos  =  ─────────────         vega_straddle = 2·exp(−r·T)·F·φ(d₁)·√T
+                   vega_straddle
+```
 
-$$\Delta_{\text{straddle}} = e^{-rT}\left[2N(d_1) - 1\right]$$
+Existe também dimensionamento por **risco** constante (`size_by_risk_target`),
+que divide pela dispersão móvel da RV. Não melhora o Sharpe — Harvey et al.
+(2018) já preveem isso para moedas — mas corta a perda máxima em 41% e o
+drawdown pela metade. Adotado por gestão de risco, não como melhora de retorno.
 
-Sem isso o P&L é $|S_T - K|$ contra o prêmio — mede **direção mais ruído**, não
+### Passo 4 — delta-hedge diário
+
+A posição é rebalanceada para delta-neutro todo pregão, na IV de entrada:
+
+```
+   Δ_straddle  =  exp(−r·T) · [ 2·N(d₁)  −  1 ]
+
+   posição_futuro(t)  =  − sinal · n_contratos · Δ_straddle(t)
+```
+
+Sem hedge o P&L é `|S_T − K|` contra o prêmio: mede **direção mais ruído**, não
 volatilidade. Com hedge, o resultado converge para
 
-$$\int \tfrac{1}{2}\,\Gamma_t\,F_t^2\,\left(\sigma_{IV}^2 - RV_t^2\right)dt$$
+```
+        ⌠
+        ⎮  ½ · Γ(t) · F(t)²  ·  ( IV²  −  RV(t)² )  dt
+        ⌡
+```
 
 que é exatamente o spread que a estratégia diz operar. Efeito medido: a
 dispersão do P&L por operação cai **61–68%** em todas as configurações.
@@ -232,9 +309,9 @@ sinal do HAR em nível é consistentemente negativo.
 
 - **Walk-forward purgado com embargo** de 5 dias (López de Prado). Nunca split
   aleatório; o treino descarta as linhas cujo rótulo se sobrepõe ao teste.
-- **Três portões pré-registrados** para qualquer camada nova: ΔR² > 0 **e**
-  ≥4/5 folds **e** Diebold-Mariano p < 0,05 em janelas **independentes**.
-  Declarados antes de rodar; nunca afrouxados depois.
+- **Três portões pré-registrados** para qualquer camada nova:
+  ΔR² > 0 **e** ≥4/5 folds **e** Diebold-Mariano p < 0,05 em janelas
+  **independentes**. Declarados antes de rodar; nunca afrouxados depois.
 - **Subperíodo como resultado principal**, pooled apenas como contexto — a
   mistura de regimes infla sistematicamente qualquer métrica agregada, e isso
   já derrubou seis achados aparentes neste projeto.
