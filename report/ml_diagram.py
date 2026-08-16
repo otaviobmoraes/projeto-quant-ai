@@ -28,23 +28,34 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch  # noqa: E402
 
-from report.plots import (  # noqa: E402
-    COLOR_BASELINE_AXIS,
-    COLOR_MUTED,
-    COLOR_PRIMARY_INK,
-    COLOR_SECONDARY_INK,
-    COLOR_SURFACE,
-    SERIES_BLUE,
+from report.figuras_vereditos import (  # noqa: E402
+    CINZA_FRACO,
+    CINZA_TEXTO,
+    GRAFITE,
+    OURO,
 )
 
 OUT_PATH = Path(__file__).resolve().parent / "output" / "diagrama_ml.png"
 
-# Ocre para o caminho oficial (mesma familia da pagina de vereditos); o azul de
-# report.plots marca as fontes de dado. Rejeitado nao ganha cor -- fica em
-# cinza pontilhado, que e exatamente o peso visual que merece.
-COLOR_ACCENT = "#b8752a"
-COLOR_REJECTED = "#8e8a80"
-COLOR_PANEL_BG = "#f4f2ed"
+# IDENTIDADE DO RELATORIO: dourado e grafite, fundo transparente.
+#
+# TRES NIVEIS, cada um marcado por COR *E* POR FORMA -- a redundancia e
+# deliberada: o diagrama vai ser impresso, projetado e provavelmente
+# fotocopiado, e a distincao entre "entrou no pipeline" e "foi descartado" nao
+# pode depender so de cor.
+#   1. FONTES DE DADO   -> borda grafite, traco solido, fundo branco
+#   2. CAMINHO OFICIAL  -> borda dourada, traco solido, fundo creme
+#   3. REJEITADO        -> borda cinza clara, traco PONTILHADO, sem fundo
+COLOR_ACCENT = OURO
+COLOR_DADOS = GRAFITE
+COLOR_REJECTED = CINZA_FRACO
+COLOR_PANEL_BG = "#faf6ec"      # creme, o dourado a 8% sobre branco
+COLOR_SURFACE = "#ffffff"       # o card do relatorio
+COLOR_PRIMARY_INK = GRAFITE
+COLOR_SECONDARY_INK = CINZA_TEXTO
+COLOR_MUTED = CINZA_FRACO
+COLOR_BASELINE_AXIS = "#d9d5cc"
+SERIES_BLUE = GRAFITE           # fontes de dado usam a tinta do relatorio
 
 # (titulo da coluna, x do centro)
 COLUNAS = [
@@ -72,7 +83,9 @@ def _caixa(
     tinta apagada -- a convencao visual que separa o que entrou no caminho
     oficial do que foi testado e descartado."""
     borda = COLOR_REJECTED if rejeitado else cor
-    fundo = COLOR_SURFACE if rejeitado else COLOR_PANEL_BG
+    # rejeitado nao ganha preenchimento: sobre o card branco do relatorio ele
+    # fica visivelmente mais leve que o caminho oficial, que e o ponto
+    fundo = "none" if rejeitado else (COLOR_SURFACE if cor == COLOR_DADOS else COLOR_PANEL_BG)
     tinta = COLOR_REJECTED if rejeitado else COLOR_PRIMARY_INK
 
     ax.add_patch(
@@ -115,8 +128,9 @@ def _seta(ax, x0: float, y0: float, x1: float, y1: float, *, cor: str = COLOR_AC
 
 def build_ml_diagram() -> Figure:
     """Monta o diagrama completo e devolve a figura (sem tocar disco)."""
-    fig, ax = plt.subplots(figsize=(17.5, 9.2), facecolor=COLOR_SURFACE)
-    ax.set_facecolor(COLOR_SURFACE)
+    fig, ax = plt.subplots(figsize=(17.5, 9.2))
+    fig.patch.set_alpha(0.0)
+    ax.set_facecolor("none")
     ax.set_xlim(0, 92)
     ax.set_ylim(0, 100)
     ax.axis("off")
@@ -215,24 +229,28 @@ def build_ml_diagram() -> Figure:
             ha="center", va="center", fontsize=7.2, color=COLOR_REJECTED, style="italic")
 
     # ---- legenda ----------------------------------------------------------
-    # posicionada sob as colunas 2-3, a unica faixa larga livre do diagrama
-    lx, ly = 21.0, 3.0
-    ax.add_patch(FancyBboxPatch((lx, ly), 26.0, 7.4,
+    # Os TRES niveis desenhados, na mesma ordem em que aparecem no fluxo.
+    # A legenda tem de listar os tres: com dois, o leitor nao sabe o que a
+    # borda grafite da coluna 1 significa.
+    lx, ly = 21.0, 1.6
+    ax.add_patch(FancyBboxPatch((lx, ly), 27.0, 10.2,
                 boxstyle="round,pad=0.3,rounding_size=0.6",
                 linewidth=1.0, edgecolor=COLOR_BASELINE_AXIS,
-                facecolor=COLOR_SURFACE, zorder=3))
-    ax.add_patch(FancyBboxPatch((lx + 1.5, ly + 3.9), 3.0, 2.0,
-                boxstyle="round,pad=0.15,rounding_size=0.4",
-                linewidth=1.4, edgecolor=COLOR_ACCENT,
-                facecolor=COLOR_PANEL_BG, zorder=4))
-    ax.text(lx + 6.0, ly + 4.9, "no caminho oficial", ha="left", va="center",
-            fontsize=7.6, color=COLOR_PRIMARY_INK, zorder=4)
-    ax.add_patch(FancyBboxPatch((lx + 1.5, ly + 1.0), 3.0, 2.0,
-                boxstyle="round,pad=0.15,rounding_size=0.4",
-                linewidth=1.4, linestyle=(0, (3, 2)), edgecolor=COLOR_REJECTED,
-                facecolor=COLOR_SURFACE, zorder=4))
-    ax.text(lx + 6.0, ly + 2.0, "testado e rejeitado", ha="left", va="center",
-            fontsize=7.6, color=COLOR_REJECTED, zorder=4)
+                facecolor="none", zorder=3))
+
+    niveis = [
+        (COLOR_DADOS, "solid", COLOR_SURFACE, "fonte de dado", COLOR_PRIMARY_INK),
+        (COLOR_ACCENT, "solid", COLOR_PANEL_BG, "no caminho oficial", COLOR_PRIMARY_INK),
+        (COLOR_REJECTED, (0, (3, 2)), "none", "testado e rejeitado", COLOR_REJECTED),
+    ]
+    for i, (borda, traco, fundo, rotulo, tinta) in enumerate(niveis):
+        yy = ly + 7.2 - i * 2.9
+        ax.add_patch(FancyBboxPatch((lx + 1.5, yy), 3.0, 1.9,
+                    boxstyle="round,pad=0.15,rounding_size=0.4",
+                    linewidth=1.4, linestyle=traco, edgecolor=borda,
+                    facecolor=fundo, zorder=4))
+        ax.text(lx + 6.0, yy + 0.95, rotulo, ha="left", va="center",
+                fontsize=7.6, color=tinta, zorder=4)
 
     ax.text(91.5, 5.0,
             "★ único modelo que passa nos três portões — e só em h=1,\n"
@@ -256,7 +274,7 @@ def save_ml_diagram(path: Path = OUT_PATH, dpi: int = 200) -> Path:
     """Grava o diagrama em disco e devolve o caminho."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fig = build_ml_diagram()
-    fig.savefig(path, dpi=dpi, facecolor=COLOR_SURFACE, bbox_inches="tight")
+    fig.savefig(path, dpi=dpi, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return path
 
