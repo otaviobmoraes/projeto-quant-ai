@@ -252,6 +252,49 @@ def fig_rv_historia(rv: pd.Series) -> Figure:
     return fig
 
 
+def fig_pnl_dois_horizontes(curto: pd.DataFrame, longo: pd.DataFrame) -> Figure:
+    """P&L acumulado do MODELO FINAL (h=5) contra o mesmo modelo em h=21.
+
+    POR QUE ESTA E A FIGURA CERTA DO BACKTEST, e a de h=21 sozinha nao era:
+    a curva de h=21 mostra o modelo operando no horizonte em que este projeto
+    DEMONSTROU nao haver sinal. Apresenta-la como "o backtest" descreve uma
+    estrategia que a versao final nao usa.
+
+    O que muda entre as duas curvas e SO o horizonte -- mesmo modelo, mesmo
+    periodo (2019-02 a 2023-03), mesma banda morta, mesmo delta-hedge, spread
+    medido na faixa de vencimento correspondente a cada um. Por isso o
+    contraste e a tese do trabalho desenhada, e nao selecao de janela: nenhuma
+    data foi escolhida depois de ver o resultado.
+    """
+    fig, ax = _eixos((9.5, 5.0))
+
+    for tr, cor, rotulo, largura in (
+        (longo, CARVAO, "h = 21 dias úteis (horizonte sem sinal)", 1.5),
+        (curto, OURO, "h = 5 dias úteis (modelo final)", 2.2),
+    ):
+        ordenado = tr.sort_values("exit_date")
+        acum = ordenado["pnl_net"].cumsum().to_numpy()
+        ax.plot(ordenado["exit_date"], acum, color=cor, linewidth=largura,
+                label=rotulo, zorder=3)
+        ax.annotate(f"{acum[-1]:+,.0f}".replace(",", "."),
+                    (ordenado["exit_date"].iloc[-1], acum[-1]),
+                    textcoords="offset points", xytext=(10, 0), fontsize=10,
+                    color=cor, fontweight="bold", va="center")
+
+    ordenado = curto.sort_values("exit_date")
+    ax.fill_between(ordenado["exit_date"], 0, ordenado["pnl_net"].cumsum().to_numpy(),
+                    color=OURO, alpha=0.12, zorder=2)
+    ax.axhline(0, color=LINHA_ZERO, linewidth=1.3, zorder=1)
+
+    ax.set_ylabel("P&L acumulado (unidades do modelo)", color=CINZA_TEXTO, fontsize=10)
+    ax.legend(frameon=False, fontsize=9.5, labelcolor=CINZA_TEXTO, loc="upper left")
+    _titulo(ax, "O mesmo modelo, dois horizontes",
+            f"Straddle ATM delta-neutro · spread medido · {len(curto)} e {len(longo)} operações "
+            "não sobrepostas · unidades absolutas")
+    fig.tight_layout()
+    return fig
+
+
 def fig_pnl_e_drawdown(trades: pd.DataFrame, titulo: str) -> Figure:
     """Curva de P&L acumulado com o drawdown logo abaixo, eixo x compartilhado.
 
@@ -414,6 +457,18 @@ def computar_dados() -> dict:
     folds21 = purged_walk_forward_splits_by_step(ds21, 252, HORIZON_PADRAO, HORIZON_PADRAO, EMBARGO)
     fc_nivel = generate_oos_rv_forecast(ds21, BASELINE_FEATURES, HORIZON_PADRAO, 5, EMBARGO,
                                         log_target=True, folds=folds21)
+    # --- backtest do MODELO FINAL (h=5) e do mesmo modelo em h=21 ----------
+    # spread medido na faixa de vencimento correspondente a cada horizonte
+    trades_por_h = {}
+    for h_op, (lo_d, hi_d), spread in ((5, (3, 12), 0.0851), (21, (15, 60), 0.0694)):
+        atm_h = atm_iv_by_date(filter_quality(com_iv, dte_range=(lo_d, hi_d)), 0.03)
+        iv_h = atm_h.groupby("date")["iv_pct"].mean()
+        iv_h.index = pd.DatetimeIndex([pd.Timestamp(d).date() for d in iv_h.index])
+        trades_por_h[h_op] = run_backtest_delta_hedged(
+            p, _previsao_livre_de_escala(v, h_op), iv_h,
+            horizon=h_op, band_pct=1.0, spread_pct=spread,
+        )
+
     hedge_linhas, trades_hedge = [], None
     for banda in (0.5, 1.0, 2.0):
         args = dict(horizon=HORIZON_PADRAO, band_pct=banda, spread_pct=0.05)
@@ -436,6 +491,8 @@ def computar_dados() -> dict:
         "capacidade": cap,
         "hedge": pd.DataFrame(hedge_linhas),
         "trades_hedge": trades_hedge,
+        "trades_h5": trades_por_h[5],
+        "trades_h21": trades_por_h[21],
         "rv_historia": rv_hist,
     }
 
@@ -521,11 +578,13 @@ def gerar_todas(out_dir: Path = OUT_DIR) -> list[Path]:
         ("sharpe_por_horizonte", fig_sharpe_por_horizonte(dados["sharpe_horizonte"])),
         ("capacidade_modelo", fig_capacidade(dados["capacidade"])),
         ("hedge_antes_depois", fig_hedge_antes_depois(dados["hedge"])),
+        ("pnl_dois_horizontes", fig_pnl_dois_horizontes(
+            dados["trades_h5"], dados["trades_h21"])),
         ("pnl_e_drawdown", fig_pnl_e_drawdown(
-            dados["trades_hedge"],
-            "Backtest com delta-hedge: P&L acumulado e drawdown")),
+            dados["trades_h5"],
+            "Modelo final (h=5): P&L acumulado e drawdown")),
         ("distribuicao_pnl", fig_distribuicao_pnl(
-            dados["trades_hedge"], "Distribuição do resultado por operação")),
+            dados["trades_h5"], "Distribuição do resultado por operação (h=5)")),
         ("rv_realizada", fig_rv_historia(dados["rv_historia"])),
     ):
         caminho = out_dir / f"{nome}.png"
