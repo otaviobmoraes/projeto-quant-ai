@@ -159,14 +159,15 @@ def test_distribuicao_reporta_assimetria(trades):
 
 
 def test_figuras_usam_a_paleta_validada(sharpe_h):
-    """Dourado + azul foram validados juntos no script da skill de dataviz
-    (protanopia, deuteranopia, tritanopia). Se alguém trocar o par, o teste
-    avisa -- duas tonalidades do mesmo dourado reprovariam na separação."""
+    """UMA cor forte só: dourado. A segunda série é um neutro, não outra cor.
+    Separação medida no validador da skill: ΔE 27,8 em protanopia e 28,5 em
+    tritanopia, contra limiar de 8. Se alguém reintroduzir uma cor saturada
+    como segunda série, este teste avisa."""
     assert fv.OURO == "#c2a14d"
-    assert fv.AZUL == "#2d6a9f"
+    assert fv.CARVAO == "#55555a"
     fig = fv.fig_sharpe_por_horizonte(sharpe_h)
     cores = {matplotlib.colors.to_hex(p.get_facecolor()) for p in fig.axes[0].patches}
-    assert fv.OURO in cores and fv.AZUL in cores
+    assert fv.OURO in cores and fv.CARVAO in cores
     _fecha(fig)
 
 

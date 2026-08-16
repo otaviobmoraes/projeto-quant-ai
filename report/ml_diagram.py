@@ -55,7 +55,6 @@ COLOR_PRIMARY_INK = GRAFITE
 COLOR_SECONDARY_INK = CINZA_TEXTO
 COLOR_MUTED = CINZA_FRACO
 COLOR_BASELINE_AXIS = "#d9d5cc"
-SERIES_BLUE = GRAFITE           # fontes de dado usam a tinta do relatorio
 
 # (titulo da coluna, x do centro)
 COLUNAS = [
@@ -148,11 +147,11 @@ def build_ml_diagram() -> Figure:
 
     # ---- 1. entradas ------------------------------------------------------
     _caixa(ax, x1, 82, "Futuro de dólar B3 (BVBG-086)",
-           "OHLC + ajuste · 2.135 pregões · 2018–2026", cor=SERIES_BLUE)
+           "OHLC + ajuste · 2.135 pregões · 2018–2026", cor=COLOR_DADOS)
     _caixa(ax, x1, 71, "Negócios de opção B3",
-           "13.350 negócios → IV via Black-76", cor=SERIES_BLUE)
+           "13.350 negócios → IV via Black-76", cor=COLOR_DADOS)
     _caixa(ax, x1, 60, "Spread bid-ask (MinPric/MaxPric)",
-           "mediana 4,43% do prêmio", cor=SERIES_BLUE)
+           "mediana 4,43% do prêmio", cor=COLOR_DADOS)
 
     ax.text(x1, 50.5, "camadas exógenas testadas", ha="center", va="center",
             fontsize=7.6, color=COLOR_REJECTED, style="italic")

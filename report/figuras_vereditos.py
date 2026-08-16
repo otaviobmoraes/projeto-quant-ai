@@ -42,14 +42,23 @@ OUT_DIR = Path(__file__).resolve().parent / "output"
 # A referencia de leitura fica na linha do zero e nos rotulos diretos, que ja
 # estao em toda barra.
 #
-# O par dourado+azul foi validado no script da skill de dataviz (protanopia,
-# deuteranopia, tritanopia e contraste sobre superficie clara). O dourado
-# sozinho nao serve para series multiplas -- duas tonalidades do mesmo ouro
-# reprovam na separacao para daltonicos --, entao o azul entra como segunda
-# serie e o dourado fica reservado ao que a figura quer destacar.
+# UMA COR FORTE SO. O dourado e a unica cor saturada; todo o resto e neutro.
+# A segunda serie e um CARVAO, nao outra cor -- o desenho e "destaque contra
+# referencia", nao duas categorias de peso igual.
+#
+# O validador da skill de dataviz reprova o carvao no PISO DE CROMA, e isso e
+# esperado: esse teste existe para dizer "esta cor le como cinza", que aqui e
+# exatamente a intencao. O que importa nesse desenho sao as checagens de
+# SEPARACAO, e elas passam com folga -- delta E de 27,8 em protanopia e 28,5
+# em tritanopia, contra o limiar de 8. E separacao MELHOR que a do par com
+# azul que existia antes (19,8), porque dourado e carvao diferem tambem em
+# luminosidade, entao sobrevivem a impressao em preto e branco.
+#
+# REGRA DE ATRIBUICAO: o dourado marca a serie PRINCIPAL de cada figura --
+# aquela sobre a qual o titulo fala. O carvao marca a comparacao.
 # ---------------------------------------------------------------------------
-OURO = "#c2a14d"          # destaque, mesmo dourado das faixas do relatorio
-AZUL = "#2d6a9f"          # segunda serie
+OURO = "#c2a14d"          # unica cor forte, o dourado das faixas do relatorio
+CARVAO = "#55555a"        # segunda serie, neutra
 GRAFITE = "#2b2b2d"       # titulos, mesma tinta do bloco de capitulo
 CINZA_TEXTO = "#5a5a5c"   # subtitulos e rotulos de eixo
 CINZA_FRACO = "#9a9a9c"   # ticks
@@ -103,8 +112,8 @@ def fig_sharpe_por_horizonte(dados: pd.DataFrame) -> Figure:
     larg = 0.36
 
     for desloc, suf, cor, rot in (
-        (-larg / 2, "sem", AZUL, "Sem custo de execução"),
-        (+larg / 2, "com", OURO, "Com spread medido"),
+        (-larg / 2, "sem", OURO, "Sem custo de execução"),
+        (+larg / 2, "com", CARVAO, "Com spread medido"),
     ):
         vals = dados[f"sr_{suf}"].to_numpy()
         lo, hi = dados[f"lo_{suf}"].to_numpy(), dados[f"hi_{suf}"].to_numpy()
@@ -136,7 +145,7 @@ def fig_capacidade(dados: pd.DataFrame) -> Figure:
     fig, ax = _eixos((9.5, 4.8))
     x = np.arange(len(dados))
     for col, cor, rot in (("r2_dentro", OURO, "R² dentro da amostra"),
-                          ("r2_fora", AZUL, "R² fora da amostra")):
+                          ("r2_fora", CARVAO, "R² fora da amostra")):
         ax.plot(x, dados[col], color=cor, linewidth=2.0, marker="o", markersize=7,
                 markeredgecolor="white", markeredgewidth=1.6, label=rot, zorder=3)
         ax.annotate(f"{dados[col].iloc[-1]:+.3f}".replace(".", ","),
@@ -189,8 +198,8 @@ def fig_hedge_antes_depois(dados: pd.DataFrame) -> Figure:
     fig, ax = _eixos((9.0, 4.8))
     x = np.arange(len(dados))
     larg = 0.36
-    for desloc, col, cor, rot in ((-larg / 2, "sem_hedge", OURO, "Sem hedge"),
-                                  (+larg / 2, "com_hedge", AZUL, "Com delta-hedge")):
+    for desloc, col, cor, rot in ((-larg / 2, "sem_hedge", CARVAO, "Sem hedge"),
+                                  (+larg / 2, "com_hedge", OURO, "Com delta-hedge")):
         vals = dados[col].to_numpy()
         ax.bar(x + desloc, vals, larg, color=cor, label=rot, zorder=3)
         for xi, v in zip(x + desloc, vals):
@@ -220,8 +229,8 @@ def fig_rv_historia(rv: pd.Series) -> Figure:
     qualquer R2 calculado no pool.
     """
     fig, ax = _eixos((9.5, 4.4))
-    ax.plot(rv.index, rv.to_numpy(), color=AZUL, linewidth=1.3, zorder=3)
-    ax.fill_between(rv.index, 0, rv.to_numpy(), color=AZUL, alpha=0.10, zorder=2)
+    ax.plot(rv.index, rv.to_numpy(), color=CARVAO, linewidth=1.3, zorder=3)
+    ax.fill_between(rv.index, 0, rv.to_numpy(), color=CARVAO, alpha=0.10, zorder=2)
 
     media = float(rv.mean())
     ax.axhline(media, color=OURO, linewidth=1.6, linestyle="--", zorder=4,
@@ -274,8 +283,8 @@ def fig_pnl_e_drawdown(trades: pd.DataFrame, titulo: str) -> Figure:
         ax.tick_params(colors=CINZA_FRACO, labelsize=9)
 
     datas = ordenado["exit_date"]
-    ax1.plot(datas, acum, color=AZUL, linewidth=1.8, zorder=3)
-    ax1.fill_between(datas, 0, acum, color=AZUL, alpha=0.10, zorder=2)
+    ax1.plot(datas, acum, color=CARVAO, linewidth=1.8, zorder=3)
+    ax1.fill_between(datas, 0, acum, color=CARVAO, alpha=0.10, zorder=2)
     ax1.axhline(0, color=LINHA_ZERO, linewidth=1.2, zorder=1)
     ax1.set_ylabel("P&L acumulado (unidades do modelo)", color=CINZA_TEXTO, fontsize=9.5)
     _titulo(ax1, titulo,
@@ -309,7 +318,7 @@ def fig_distribuicao_pnl(trades: pd.DataFrame, titulo: str) -> Figure:
     for conta, esq, dir_ in zip(n, bins[:-1], bins[1:]):
         if conta:
             ax.bar(esq, conta, width=dir_ - esq, align="edge",
-                   color=AZUL if esq >= 0 else OURO, zorder=3)
+                   color=CARVAO if esq >= 0 else OURO, zorder=3)
     ax.axvline(0, color=LINHA_ZERO, linewidth=1.3, zorder=4)
     ax.axvline(float(x.mean()), color=GRAFITE, linewidth=1.4,
                linestyle="--", zorder=5, label=f"média {x.mean():,.0f}".replace(",", "."))
