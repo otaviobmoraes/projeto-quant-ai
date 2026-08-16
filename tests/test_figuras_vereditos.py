@@ -19,8 +19,10 @@ from report import figuras_vereditos as fv  # noqa: E402
 def sharpe_h():
     return pd.DataFrame({
         "h": [5, 10, 21],
-        "sr_sem": [2.798, 0.712, 0.015], "lo_sem": [0.82, 0.02, -0.67], "hi_sem": [4.67, 1.34, 0.57],
-        "sr_com": [0.558, 0.030, -0.729], "lo_com": [-1.32, -0.69, -1.30], "hi_com": [2.39, 0.78, -0.21],
+        "sr_sem": [2.798, 0.712, 0.015],
+        "lo_sem": [0.82, 0.02, -0.67], "hi_sem": [4.67, 1.34, 0.57],
+        "sr_com": [0.558, 0.030, -0.729],
+        "lo_com": [-1.32, -0.69, -1.30], "hi_com": [2.39, 0.78, -0.21],
     })
 
 
@@ -116,7 +118,9 @@ def trades():
     n = 40
     return pd.DataFrame({
         "exit_date": pd.date_range("2020-01-01", periods=n, freq="21D"),
-        "pnl_net": np.concatenate([rng.normal(1500, 3000, n - 4), [-42000, -31000, -25000, -18000]]),
+        "pnl_net": np.concatenate(
+            [rng.normal(1500, 3000, n - 4), [-42000, -31000, -25000, -18000]]
+        ),
     })
 
 
@@ -155,12 +159,40 @@ def test_distribuicao_reporta_assimetria(trades):
 
 
 def test_figuras_usam_a_paleta_validada(sharpe_h):
-    """Ocre + azul foram validados juntos no script da skill de dataviz; se
-    alguém trocar por outro par, o teste avisa."""
-    from report.plots import SERIES_BLUE
-
-    assert fv.SERIES_OCRE == "#b8752a"
+    """Dourado + azul foram validados juntos no script da skill de dataviz
+    (protanopia, deuteranopia, tritanopia). Se alguém trocar o par, o teste
+    avisa -- duas tonalidades do mesmo dourado reprovariam na separação."""
+    assert fv.OURO == "#c2a14d"
+    assert fv.AZUL == "#2d6a9f"
     fig = fv.fig_sharpe_por_horizonte(sharpe_h)
     cores = {matplotlib.colors.to_hex(p.get_facecolor()) for p in fig.axes[0].patches}
-    assert fv.SERIES_OCRE in cores and SERIES_BLUE in cores
+    assert fv.OURO in cores and fv.AZUL in cores
+    _fecha(fig)
+
+
+def test_figuras_nao_tem_grade_nem_fundo(sharpe_h, capacidade):
+    """Padrão do relatório: as figuras são coladas no card branco, então não
+    podem trazer grade nem fundo próprio."""
+    for fig in (fv.fig_sharpe_por_horizonte(sharpe_h), fv.fig_capacidade(capacidade)):
+        ax = fig.axes[0]
+        assert not any(linha.get_visible() for linha in ax.get_ygridlines())
+        assert not any(linha.get_visible() for linha in ax.get_xgridlines())
+        assert matplotlib.colors.to_rgba(ax.get_facecolor())[3] == 0.0
+        assert fig.patch.get_alpha() == 0.0
+        # sem molduras superior/direita/esquerda
+        assert not ax.spines["top"].get_visible()
+        assert not ax.spines["right"].get_visible()
+        _fecha(fig)
+
+
+def test_rv_historia(sharpe_h):
+    import numpy as np
+
+    idx = pd.date_range("2018-01-01", periods=600, freq="B")
+    rv = pd.Series(np.abs(np.random.default_rng(1).normal(14, 4, 600)), index=idx)
+    fig = fv.fig_rv_historia(rv)
+    ax = fig.axes[0]
+    assert len(ax.lines) >= 1
+    textos = " ".join(t.get_text() for t in ax.texts)
+    assert "Parkinson" in textos and "máx." in textos
     _fecha(fig)

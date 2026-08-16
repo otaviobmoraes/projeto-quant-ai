@@ -12,9 +12,9 @@ devolvem a Figure, sem tocar disco nem recalcular nada. Quem calcula e
 `computar_dados()`. Isso e o que torna as figuras testaveis com dado sintetico,
 sem rodar backtest de minutos dentro da suite.
 
-Paleta: ocre (#b8752a) e o azul ja usado em report/plots.py, par validado pelo
-script da skill de dataviz nos tres tipos de daltonismo. Cor de status
-(bom/ruim) so na curva de P&L, onde o significado e mesmo bom/ruim.
+IDENTIDADE VISUAL: dourado e grafite do relatorio, fundo TRANSPARENTE e sem
+grade -- as figuras sao coladas dentro do card branco do documento. Ver o bloco
+de constantes abaixo para o porque de cada escolha.
 
 Uso: `python -m report.figuras_vereditos`
 """
@@ -31,32 +31,43 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
-from report.plots import (  # noqa: E402
-    COLOR_BASELINE_AXIS,
-    COLOR_GRIDLINE,
-    COLOR_MUTED,
-    COLOR_PRIMARY_INK,
-    COLOR_SECONDARY_INK,
-    COLOR_SURFACE,
-    SERIES_BLUE,
-    plot_cumulative_pnl,
-)
-
 OUT_DIR = Path(__file__).resolve().parent / "output"
-SERIES_OCRE = "#b8752a"
+
+# ---------------------------------------------------------------------------
+# Identidade visual do RELATORIO (bloco grafite + dourado sobre card branco).
+#
+# FUNDO TRANSPARENTE, sem grade: as figuras sao coladas dentro do card branco
+# do documento, entao pintar um fundo proprio criaria um retangulo visivel de
+# tom levemente diferente, e a grade competiria com a diagramacao da pagina.
+# A referencia de leitura fica na linha do zero e nos rotulos diretos, que ja
+# estao em toda barra.
+#
+# O par dourado+azul foi validado no script da skill de dataviz (protanopia,
+# deuteranopia, tritanopia e contraste sobre superficie clara). O dourado
+# sozinho nao serve para series multiplas -- duas tonalidades do mesmo ouro
+# reprovam na separacao para daltonicos --, entao o azul entra como segunda
+# serie e o dourado fica reservado ao que a figura quer destacar.
+# ---------------------------------------------------------------------------
+OURO = "#c2a14d"          # destaque, mesmo dourado das faixas do relatorio
+AZUL = "#2d6a9f"          # segunda serie
+GRAFITE = "#2b2b2d"       # titulos, mesma tinta do bloco de capitulo
+CINZA_TEXTO = "#5a5a5c"   # subtitulos e rotulos de eixo
+CINZA_FRACO = "#9a9a9c"   # ticks
+LINHA_ZERO = "#c9c9cb"    # unica referencia horizontal que sobra
 
 HORIZON_PADRAO, EMBARGO = 21, 5
 
 
 def _eixos(figsize=(9, 4.8)) -> tuple[Figure, plt.Axes]:
-    fig, ax = plt.subplots(figsize=figsize, facecolor=COLOR_SURFACE)
-    ax.set_facecolor(COLOR_SURFACE)
-    ax.grid(True, axis="y", color=COLOR_GRIDLINE, linewidth=0.8, zorder=0)
-    for lado in ("top", "right"):
+    """Eixos no padrao do relatorio: sem fundo, sem grade, sem molduras."""
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.patch.set_alpha(0.0)
+    ax.set_facecolor("none")
+    ax.grid(False)
+    for lado in ("top", "right", "left"):
         ax.spines[lado].set_visible(False)
-    for lado in ("left", "bottom"):
-        ax.spines[lado].set_color(COLOR_BASELINE_AXIS)
-    ax.tick_params(colors=COLOR_MUTED, labelsize=9)
+    ax.spines["bottom"].set_color(LINHA_ZERO)
+    ax.tick_params(colors=CINZA_FRACO, labelsize=9, length=0)
     return fig, ax
 
 
@@ -69,12 +80,12 @@ def _titulo(ax, titulo: str, subtitulo: str = "") -> None:
     """
     if subtitulo:
         ax.text(0, 1.13, titulo, transform=ax.transAxes, fontsize=12.5,
-                color=COLOR_PRIMARY_INK, va="bottom", ha="left")
+                color=GRAFITE, va="bottom", ha="left")
         ax.text(0, 1.045, subtitulo, transform=ax.transAxes, fontsize=9.2,
-                color=COLOR_MUTED, va="bottom", ha="left")
+                color=CINZA_FRACO, va="bottom", ha="left")
     else:
         ax.text(0, 1.045, titulo, transform=ax.transAxes, fontsize=12.5,
-                color=COLOR_PRIMARY_INK, va="bottom", ha="left")
+                color=GRAFITE, va="bottom", ha="left")
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +103,8 @@ def fig_sharpe_por_horizonte(dados: pd.DataFrame) -> Figure:
     larg = 0.36
 
     for desloc, suf, cor, rot in (
-        (-larg / 2, "sem", SERIES_BLUE, "Sem custo de execução"),
-        (+larg / 2, "com", SERIES_OCRE, "Com spread medido"),
+        (-larg / 2, "sem", AZUL, "Sem custo de execução"),
+        (+larg / 2, "com", OURO, "Com spread medido"),
     ):
         vals = dados[f"sr_{suf}"].to_numpy()
         lo, hi = dados[f"lo_{suf}"].to_numpy(), dados[f"hi_{suf}"].to_numpy()
@@ -102,15 +113,15 @@ def fig_sharpe_por_horizonte(dados: pd.DataFrame) -> Figure:
                     ecolor=cor, elinewidth=1.4, capsize=5, capthick=1.4, zorder=4)
         for xi, v, h in zip(x + desloc, vals, hi):
             ax.annotate(f"{v:+.2f}".replace(".", ","), (xi, h), textcoords="offset points",
-                        xytext=(0, 7), ha="center", fontsize=9, color=COLOR_PRIMARY_INK,
+                        xytext=(0, 7), ha="center", fontsize=9, color=GRAFITE,
                         fontweight="bold", zorder=5)
 
-    ax.axhline(0, color=COLOR_BASELINE_AXIS, linewidth=1.3, zorder=2)
+    ax.axhline(0, color=LINHA_ZERO, linewidth=1.3, zorder=2)
     ax.set_xticks(x)
     ax.set_xticklabels([f"h = {int(h)} dias úteis" for h in dados["h"]], fontsize=10,
-                       color=COLOR_SECONDARY_INK)
-    ax.set_ylabel("Sharpe anualizado", color=COLOR_SECONDARY_INK, fontsize=10)
-    ax.legend(frameon=False, fontsize=9.5, labelcolor=COLOR_SECONDARY_INK, loc="upper right")
+                       color=CINZA_TEXTO)
+    ax.set_ylabel("Sharpe anualizado", color=CINZA_TEXTO, fontsize=10)
+    ax.legend(frameon=False, fontsize=9.5, labelcolor=CINZA_TEXTO, loc="upper right")
     _titulo(ax, "O Sharpe é monotônico no horizonte",
             "Straddle ATM delta-neutro · IC95 por bootstrap de bloco (Ledoit & Wolf, 2008)")
     fig.tight_layout()
@@ -124,20 +135,20 @@ def fig_capacidade(dados: pd.DataFrame) -> Figure:
     """
     fig, ax = _eixos((9.5, 4.8))
     x = np.arange(len(dados))
-    for col, cor, rot in (("r2_dentro", SERIES_OCRE, "R² dentro da amostra"),
-                          ("r2_fora", SERIES_BLUE, "R² fora da amostra")):
+    for col, cor, rot in (("r2_dentro", OURO, "R² dentro da amostra"),
+                          ("r2_fora", AZUL, "R² fora da amostra")):
         ax.plot(x, dados[col], color=cor, linewidth=2.0, marker="o", markersize=7,
-                markeredgecolor=COLOR_SURFACE, markeredgewidth=1.6, label=rot, zorder=3)
+                markeredgecolor="white", markeredgewidth=1.6, label=rot, zorder=3)
         ax.annotate(f"{dados[col].iloc[-1]:+.3f}".replace(".", ","),
                     (x[-1], dados[col].iloc[-1]), textcoords="offset points",
                     xytext=(10, -3), fontsize=9.5, color=cor, fontweight="bold")
 
-    ax.axhline(0, color=COLOR_BASELINE_AXIS, linewidth=1.3, zorder=2)
+    ax.axhline(0, color=LINHA_ZERO, linewidth=1.3, zorder=2)
     ax.set_xticks(x)
-    ax.set_xticklabels(dados["capacidade"], fontsize=9.5, color=COLOR_SECONDARY_INK)
-    ax.set_ylabel("R²", color=COLOR_SECONDARY_INK, fontsize=10)
+    ax.set_xticklabels(dados["capacidade"], fontsize=9.5, color=CINZA_TEXTO)
+    ax.set_ylabel("R²", color=CINZA_TEXTO, fontsize=10)
     ax.set_xlim(-0.3, len(dados) - 0.5)
-    ax.legend(frameon=False, fontsize=9.5, labelcolor=COLOR_SECONDARY_INK, loc="center left")
+    ax.legend(frameon=False, fontsize=9.5, labelcolor=CINZA_TEXTO, loc="center left")
     _titulo(ax, "Mais capacidade memoriza o treino e piora a previsão",
             "h=21 · XGBoost com regularização desligada · bloco de teste fixo em 400 pregões")
     fig.tight_layout()
@@ -152,17 +163,17 @@ def fig_spread_por_prazo(dados: pd.DataFrame) -> Figure:
     fig, ax = _eixos((9.0, 4.6))
     x = np.arange(len(dados))
     pct = dados["mediana"].to_numpy() * 100
-    ax.bar(x, pct, 0.6, color=SERIES_OCRE, zorder=3)
+    ax.bar(x, pct, 0.6, color=OURO, zorder=3)
     for xi, v, n in zip(x, pct, dados["n"]):
         ax.annotate(f"{v:.2f}%".replace(".", ","), (xi, v), textcoords="offset points",
-                    xytext=(0, 6), ha="center", fontsize=9.5, color=COLOR_PRIMARY_INK,
+                    xytext=(0, 6), ha="center", fontsize=9.5, color=GRAFITE,
                     fontweight="bold")
         ax.annotate(f"n={int(n)}", (xi, 0), textcoords="offset points", xytext=(0, -22),
-                    ha="center", fontsize=8.5, color=COLOR_MUTED, annotation_clip=False)
+                    ha="center", fontsize=8.5, color=CINZA_FRACO, annotation_clip=False)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(dados["faixa"], fontsize=10, color=COLOR_SECONDARY_INK)
-    ax.set_ylabel("Spread por transação (% do prêmio)", color=COLOR_SECONDARY_INK, fontsize=10)
+    ax.set_xticklabels(dados["faixa"], fontsize=10, color=CINZA_TEXTO)
+    ax.set_ylabel("Spread por transação (% do prêmio)", color=CINZA_TEXTO, fontsize=10)
     ax.set_ylim(0, max(pct) * 1.22)
     _titulo(ax, "O spread relativo explode em prazo curto",
             "Séries ATM (|moneyness| ≤ 3%) com ≥2 negócios · medido de MinPric/MaxPric da B3")
@@ -178,24 +189,56 @@ def fig_hedge_antes_depois(dados: pd.DataFrame) -> Figure:
     fig, ax = _eixos((9.0, 4.8))
     x = np.arange(len(dados))
     larg = 0.36
-    for desloc, col, cor, rot in ((-larg / 2, "sem_hedge", SERIES_OCRE, "Sem hedge"),
-                                  (+larg / 2, "com_hedge", SERIES_BLUE, "Com delta-hedge")):
+    for desloc, col, cor, rot in ((-larg / 2, "sem_hedge", OURO, "Sem hedge"),
+                                  (+larg / 2, "com_hedge", AZUL, "Com delta-hedge")):
         vals = dados[col].to_numpy()
         ax.bar(x + desloc, vals, larg, color=cor, label=rot, zorder=3)
         for xi, v in zip(x + desloc, vals):
             ax.annotate(f"{v:+.2f}".replace(".", ","), (xi, v), textcoords="offset points",
                         xytext=(0, 7 if v >= 0 else -16), ha="center", fontsize=9,
-                        color=COLOR_PRIMARY_INK, fontweight="bold")
+                        color=GRAFITE, fontweight="bold")
 
-    ax.axhline(0, color=COLOR_BASELINE_AXIS, linewidth=1.3, zorder=2)
+    ax.axhline(0, color=LINHA_ZERO, linewidth=1.3, zorder=2)
     ax.set_xticks(x)
     ax.set_xticklabels([f"banda {b}".replace(".", ",") for b in dados["banda"]],
-                       fontsize=10, color=COLOR_SECONDARY_INK)
-    ax.set_ylabel("Sharpe anualizado", color=COLOR_SECONDARY_INK, fontsize=10)
-    ax.legend(frameon=False, fontsize=9.5, labelcolor=COLOR_SECONDARY_INK, loc="lower right")
+                       fontsize=10, color=CINZA_TEXTO)
+    ax.set_ylabel("Sharpe anualizado", color=CINZA_TEXTO, fontsize=10)
+    ax.legend(frameon=False, fontsize=9.5, labelcolor=CINZA_TEXTO, loc="lower right")
     _titulo(ax, "Sem hedge o Sharpe troca de sinal; com hedge, não",
             "HAR em nível · IV real · trocar de sinal entre bandas "
             "é assinatura de resultado frágil")
+    fig.tight_layout()
+    return fig
+
+
+def fig_rv_historia(rv: pd.Series) -> Figure:
+    """Historia da volatilidade realizada do futuro de dolar.
+
+    E a figura de contexto do relatorio: mostra a amplitude de regimes que a
+    amostra cobre (2018-2026) e, por consequencia, por que metrica agregada
+    engana neste dataset -- a mistura de regimes infla o denominador de
+    qualquer R2 calculado no pool.
+    """
+    fig, ax = _eixos((9.5, 4.4))
+    ax.plot(rv.index, rv.to_numpy(), color=AZUL, linewidth=1.3, zorder=3)
+    ax.fill_between(rv.index, 0, rv.to_numpy(), color=AZUL, alpha=0.10, zorder=2)
+
+    media = float(rv.mean())
+    ax.axhline(media, color=OURO, linewidth=1.6, linestyle="--", zorder=4,
+               label=f"média {media:.1f}%".replace(".", ","))
+
+    i_max = rv.idxmax()
+    # o replace so pode alcancar o NUMERO: aplicado a frase inteira, ele
+    # transformaria "max." em "max," (bug pego por teste)
+    ax.annotate("máx. " + f"{rv.max():.1f}%".replace(".", ","), (i_max, rv.max()),
+                textcoords="offset points", xytext=(8, -4), fontsize=9,
+                color=GRAFITE, fontweight="bold")
+
+    ax.set_ylabel("Vol. realizada anualizada (%)", color=CINZA_TEXTO, fontsize=10)
+    ax.set_ylim(0, rv.max() * 1.12)
+    ax.legend(frameon=False, fontsize=9.5, labelcolor=CINZA_TEXTO, loc="upper right")
+    _titulo(ax, "Volatilidade realizada do futuro de dólar",
+            f"Estimador de Parkinson · janela de 21 pregões · {len(rv)} observações")
     fig.tight_layout()
     return fig
 
@@ -217,34 +260,35 @@ def fig_pnl_e_drawdown(trades: pd.DataFrame, titulo: str) -> Figure:
     dd = acum - pico
 
     fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(9.5, 6.0), facecolor=COLOR_SURFACE, sharex=True,
+        2, 1, figsize=(9.5, 6.0), sharex=True,
         gridspec_kw={"height_ratios": [2.4, 1], "hspace": 0.12},
     )
+    fig.patch.set_alpha(0.0)
     for ax in (ax1, ax2):
-        ax.set_facecolor(COLOR_SURFACE)
-        ax.grid(True, axis="y", color=COLOR_GRIDLINE, linewidth=0.8, zorder=0)
+        ax.set_facecolor("none")
+        ax.grid(False)
         for lado in ("top", "right"):
             ax.spines[lado].set_visible(False)
         for lado in ("left", "bottom"):
-            ax.spines[lado].set_color(COLOR_BASELINE_AXIS)
-        ax.tick_params(colors=COLOR_MUTED, labelsize=9)
+            ax.spines[lado].set_color(LINHA_ZERO)
+        ax.tick_params(colors=CINZA_FRACO, labelsize=9)
 
     datas = ordenado["exit_date"]
-    ax1.plot(datas, acum, color=SERIES_BLUE, linewidth=1.8, zorder=3)
-    ax1.fill_between(datas, 0, acum, color=SERIES_BLUE, alpha=0.10, zorder=2)
-    ax1.axhline(0, color=COLOR_BASELINE_AXIS, linewidth=1.2, zorder=1)
-    ax1.set_ylabel("P&L acumulado (unidades do modelo)", color=COLOR_SECONDARY_INK, fontsize=9.5)
+    ax1.plot(datas, acum, color=AZUL, linewidth=1.8, zorder=3)
+    ax1.fill_between(datas, 0, acum, color=AZUL, alpha=0.10, zorder=2)
+    ax1.axhline(0, color=LINHA_ZERO, linewidth=1.2, zorder=1)
+    ax1.set_ylabel("P&L acumulado (unidades do modelo)", color=CINZA_TEXTO, fontsize=9.5)
     _titulo(ax1, titulo,
             "Unidades absolutas — retorno sobre capital não é calculável "
             "(a margem não está nos dados)")
 
-    ax2.fill_between(datas, 0, dd, color=SERIES_OCRE, alpha=0.30, zorder=2)
-    ax2.plot(datas, dd, color=SERIES_OCRE, linewidth=1.4, zorder=3)
-    ax2.set_ylabel("Drawdown", color=COLOR_SECONDARY_INK, fontsize=9.5)
+    ax2.fill_between(datas, 0, dd, color=OURO, alpha=0.30, zorder=2)
+    ax2.plot(datas, dd, color=OURO, linewidth=1.4, zorder=3)
+    ax2.set_ylabel("Drawdown", color=CINZA_TEXTO, fontsize=9.5)
     i_vale = int(np.argmin(dd))
     ax2.annotate(f"máx. {dd[i_vale]:,.0f}".replace(",", "."),
                  (datas.iloc[i_vale], dd[i_vale]), textcoords="offset points",
-                 xytext=(8, 6), fontsize=9, color=SERIES_OCRE, fontweight="bold")
+                 xytext=(8, 6), fontsize=9, color=OURO, fontweight="bold")
 
     # subplots_adjust em vez de tight_layout: com sharex + gridspec_kw o
     # tight_layout avisa que pode errar o resultado, e aqui as margens sao
@@ -261,17 +305,17 @@ def fig_distribuicao_pnl(trades: pd.DataFrame, titulo: str) -> Figure:
     """
     x = trades["pnl_net"].to_numpy()
     fig, ax = _eixos((9.0, 4.4))
-    n, bins, _ = ax.hist(x, bins=22, color=COLOR_GRIDLINE, zorder=2)
+    n, bins, _ = ax.hist(x, bins=22, color=LINHA_ZERO, zorder=2)
     for conta, esq, dir_ in zip(n, bins[:-1], bins[1:]):
         if conta:
             ax.bar(esq, conta, width=dir_ - esq, align="edge",
-                   color=SERIES_BLUE if esq >= 0 else SERIES_OCRE, zorder=3)
-    ax.axvline(0, color=COLOR_BASELINE_AXIS, linewidth=1.3, zorder=4)
-    ax.axvline(float(x.mean()), color=COLOR_PRIMARY_INK, linewidth=1.4,
+                   color=AZUL if esq >= 0 else OURO, zorder=3)
+    ax.axvline(0, color=LINHA_ZERO, linewidth=1.3, zorder=4)
+    ax.axvline(float(x.mean()), color=GRAFITE, linewidth=1.4,
                linestyle="--", zorder=5, label=f"média {x.mean():,.0f}".replace(",", "."))
-    ax.set_xlabel("P&L por operação (unidades do modelo)", color=COLOR_SECONDARY_INK, fontsize=10)
-    ax.set_ylabel("operações", color=COLOR_SECONDARY_INK, fontsize=10)
-    ax.legend(frameon=False, fontsize=9.5, labelcolor=COLOR_SECONDARY_INK)
+    ax.set_xlabel("P&L por operação (unidades do modelo)", color=CINZA_TEXTO, fontsize=10)
+    ax.set_ylabel("operações", color=CINZA_TEXTO, fontsize=10)
+    ax.legend(frameon=False, fontsize=9.5, labelcolor=CINZA_TEXTO)
     assimetria = float(pd.Series(x).skew())
     _titulo(ax, titulo,
             f"{len(x)} operações · assimetria {assimetria:+.2f}".replace(".", ",") +
@@ -375,11 +419,15 @@ def computar_dados() -> dict:
         if banda == 1.0:
             trades_hedge = com
 
+    # serie de RV realizada (contexto do relatorio): Parkinson em janela de 21
+    rv_hist = (np.sqrt(v.rolling(21).mean() * 252) * 100).dropna()
+
     return {
         "sharpe_horizonte": sharpe_h,
         "capacidade": cap,
         "hedge": pd.DataFrame(hedge_linhas),
         "trades_hedge": trades_hedge,
+        "rv_historia": rv_hist,
     }
 
 
@@ -464,17 +512,15 @@ def gerar_todas(out_dir: Path = OUT_DIR) -> list[Path]:
         ("sharpe_por_horizonte", fig_sharpe_por_horizonte(dados["sharpe_horizonte"])),
         ("capacidade_modelo", fig_capacidade(dados["capacidade"])),
         ("hedge_antes_depois", fig_hedge_antes_depois(dados["hedge"])),
-        ("pnl_delta_hedge", plot_cumulative_pnl(
-            dados["trades_hedge"],
-            "P&L acumulado com delta-hedge diário (h=21, banda 1,0, IV real)")),
         ("pnl_e_drawdown", fig_pnl_e_drawdown(
             dados["trades_hedge"],
             "Backtest com delta-hedge: P&L acumulado e drawdown")),
         ("distribuicao_pnl", fig_distribuicao_pnl(
             dados["trades_hedge"], "Distribuição do resultado por operação")),
+        ("rv_realizada", fig_rv_historia(dados["rv_historia"])),
     ):
         caminho = out_dir / f"{nome}.png"
-        fig.savefig(caminho, dpi=200, facecolor=COLOR_SURFACE, bbox_inches="tight")
+        fig.savefig(caminho, dpi=200, transparent=True, bbox_inches="tight")
         plt.close(fig)
         escritos.append(caminho)
         print(f"  {caminho.name}")
@@ -483,7 +529,7 @@ def gerar_todas(out_dir: Path = OUT_DIR) -> list[Path]:
     if not spread.empty:
         fig = fig_spread_por_prazo(spread)
         caminho = out_dir / "spread_por_prazo.png"
-        fig.savefig(caminho, dpi=200, facecolor=COLOR_SURFACE, bbox_inches="tight")
+        fig.savefig(caminho, dpi=200, transparent=True, bbox_inches="tight")
         plt.close(fig)
         escritos.append(caminho)
         print(f"  {caminho.name}")
