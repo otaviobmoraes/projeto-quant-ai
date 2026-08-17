@@ -66,6 +66,20 @@ LINHA_ZERO = "#c9c9cb"    # unica referencia horizontal que sobra
 
 HORIZON_PADRAO, EMBARGO = 21, 5
 
+# SPREAD MEDIDO POR HORIZONTE, uma fonte unica de verdade.
+#
+# Mediana do spread efetivo das series ATM na faixa de vencimento que cada
+# horizonte opera, medida na JANELA EM QUE O BACKTEST RODA (2021-2023) -- e
+# nao em 2026, que e o periodo de liquidez minima e superestima o spread de
+# prazo curto em ~2x. Ver data/option_spread.py para o estimador.
+#
+# h -> (janela de vencimento em dias corridos, spread mediano, n de observacoes)
+SPREAD_POR_HORIZONTE: dict[int, tuple[tuple[int, int], float, int]] = {
+    5: ((3, 12), 0.0851, 29),
+    10: ((8, 20), 0.0420, 27),
+    21: ((15, 60), 0.0447, 76),
+}
+
 
 def _eixos(figsize=(9, 4.8)) -> tuple[Figure, plt.Axes]:
     """Eixos no padrao do relatorio: sem fundo, sem grade, sem molduras."""
@@ -429,13 +443,13 @@ def computar_dados() -> dict:
 
     # --- Sharpe por horizonte ------------------------------------------
     linhas = []
-    for h, (lo_d, hi_d) in ((5, (3, 12)), (10, (8, 20)), (21, (15, 60))):
+    for h, ((lo_d, hi_d), spread_h, _) in SPREAD_POR_HORIZONTE.items():
         atm = atm_iv_by_date(filter_quality(com_iv, dte_range=(lo_d, hi_d)), 0.03)
         iv = atm.groupby("date")["iv_pct"].mean()
         iv.index = pd.DatetimeIndex([pd.Timestamp(d).date() for d in iv.index])
         fc = _previsao_livre_de_escala(v, h)
         reg = {"h": h}
-        for suf, spread in (("sem", 0.0), ("com", {5: 0.1712, 10: 0.0560, 21: 0.0694}[h])):
+        for suf, spread in (("sem", 0.0), ("com", spread_h)):
             tr = run_backtest_delta_hedged(p, fc, iv, horizon=h, band_pct=1.0,
                                            spread_pct=spread, allow_overlap=True)
             b = block_bootstrap_sharpe(tr["pnl_net"].to_numpy(), annualization=252 / h,
@@ -460,7 +474,8 @@ def computar_dados() -> dict:
     # --- backtest do MODELO FINAL (h=5) e do mesmo modelo em h=21 ----------
     # spread medido na faixa de vencimento correspondente a cada horizonte
     trades_por_h = {}
-    for h_op, (lo_d, hi_d), spread in ((5, (3, 12), 0.0851), (21, (15, 60), 0.0694)):
+    for h_op in (5, 21):
+        (lo_d, hi_d), spread, _ = SPREAD_POR_HORIZONTE[h_op]
         atm_h = atm_iv_by_date(filter_quality(com_iv, dte_range=(lo_d, hi_d)), 0.03)
         iv_h = atm_h.groupby("date")["iv_pct"].mean()
         iv_h.index = pd.DatetimeIndex([pd.Timestamp(d).date() for d in iv_h.index])
